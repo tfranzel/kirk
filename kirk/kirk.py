@@ -136,6 +136,8 @@ class Kirk:
         elif val.code in [curses.KEY_LEFT, curses.KEY_RIGHT]:
             # change tabs
             self.switch_window_relative(offset=1 if val.code == curses.KEY_RIGHT else -1)
+        elif val.name == "RESIZE_EVENT":
+            self.dirty = True
         elif val.name == "KEY_TAB":
             pass  # TODO
         elif val.name == "KEY_ESCAPE":
@@ -418,7 +420,7 @@ class Kirk:
         #     print(f"f:{self._frame}", end="")
 
     def run(self) -> None:
-        with self.t.fullscreen(), self.t.cbreak(), self.t.hidden_cursor():
+        with self.t.fullscreen(), self.t.cbreak(), self.t.hidden_cursor(), self.t.notify_on_resize():
             print(self.t.home + self.t.clear, end="")
             val = Keystroke()
             while True:

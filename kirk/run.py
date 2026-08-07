@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import os
+import signal
 import tomllib
 
 from kirk.client import IrcClient
@@ -35,6 +36,13 @@ async def main() -> None:
         for c in config["kirk"]["client"]
     ]
     kirk = Kirk(clients, loop)
+
+    # blessed's notify_on_resize() relies on the terminal supporting in-band
+    # resize notifications (DEC mode 2048); tmux does not implement that, so
+    # fall back to SIGWINCH to still pick up resizes when running inside it.
+    if not kirk.t.does_inband_resize():
+        signal.signal(signal.SIGWINCH, lambda *_: setattr(kirk, "dirty", True))
+
     if persistence:
         print("Beaming up crew ...")
         Transporter.beam_up(kirk)

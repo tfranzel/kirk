@@ -8,6 +8,7 @@ wheels/
 .DS_Store
 .idea/
 *.log
+.coverage
 
 # Virtual environments
 .venv
