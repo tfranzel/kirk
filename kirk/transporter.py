@@ -12,9 +12,11 @@ if typing.TYPE_CHECKING:
 
 
 class Transporter:
+    """Handles saving and loading of Kirk session state to/from disk."""
+
     @classmethod
     def beam_down(cls, kirk: "Kirk") -> None:
-        """save state of kirk session"""
+        """Save current Kirk session state to disk."""
         data = {}
         for client in kirk.clients:
             data[client.host] = {
@@ -26,7 +28,7 @@ class Transporter:
 
     @classmethod
     def beam_up(cls, kirk: "Kirk") -> None:
-        """load state of previous kirk session"""
+        """Restore Kirk session state from disk."""
         try:
             with open(os.path.expanduser("~/.kirk_state.json")) as fh:
                 data = json.load(fh)

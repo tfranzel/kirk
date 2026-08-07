@@ -30,6 +30,8 @@ class ServerTerminationError(Exception):
 
 @dataclass
 class IrcRawMessage:
+    """Represents a parsed IRC message with metadata."""
+
     prefix: str | None
     command: str
     params: list[str]
@@ -38,12 +40,14 @@ class IrcRawMessage:
 
     @property
     def prefix_nick(self) -> str:
+        """Extract nickname from IRC message prefix."""
         if self.prefix and "!" in self.prefix:
             return self.prefix.split("!")[0]
         return self.prefix or ""
 
     @property
     def prefix_host(self) -> str:
+        """Extract host/user info from IRC message prefix."""
         if self.prefix and "!" in self.prefix:
             return self.prefix.split("!")[1]
         return ""
@@ -70,12 +74,12 @@ class Buffer[T]:
         return self.len
 
     def __iter__(self) -> Iterator[T]:
-        """Generator yields LIFO, i.e. newest first"""
+        """Iterate buffer LIFO (newest first)."""
         for i in range(self.len):
             yield self._buf[(self.idx - i - 1) % self.size]
 
     def fixed_iter(self, start: int) -> Iterator[T]:
-        """Iterates previous items from a fixed start-point, independent of working index"""
+        """Iterate from fixed start point for scrollback functionality."""
         if self.len == self.size:
             if start <= self.idx:
                 readable = start + self.len - self.idx
@@ -90,6 +94,8 @@ class Buffer[T]:
 
 
 class IrcChannel:
+    """Represents an IRC channel with message buffer and metadata."""
+
     def __init__(self, name: str, buf_size: int | None = None):
         self.buf = Buffer[IrcRawMessage](buf_size)
         self.name = name
@@ -100,13 +106,18 @@ class IrcChannel:
 
 
 class ChannelDict(defaultdict[str, IrcChannel]):
+    """Auto-creating dictionary for IRC channels."""
+
     def __missing__(self, key: str) -> IrcChannel:
+        """Create new channel when accessed."""
         self[key] = value = IrcChannel(key)
         return value
 
 
 @dataclass
 class DCC:
+    """Represents a DCC file transfer session."""
+
     source: str
     filename: str
     size: int
@@ -554,16 +565,16 @@ class IrcClient:
     def log(
         self,
         message: IrcRawMessage | str,
-        head: str | None = None,
+        category: str | None = None,
         level: int = logging.INFO,
     ) -> None:
         msg = (
             f"{message.ts if isinstance(message, IrcRawMessage) else datetime.now()}:{self.host}"
-            f":{head or (message.command if isinstance(message, IrcRawMessage) else 'N/A')}"
+            f":{category or (message.command if isinstance(message, IrcRawMessage) else 'N/A')}"
             f":{message}"
         )
         if not isinstance(message, IrcRawMessage):
-            self.log_buf.insert(IrcRawMessage(head or "INT", str(level), [message]))
+            self.log_buf.insert(IrcRawMessage(category or "INT", str(level), [message]))
         match self.log_mode:
             case "file":
                 self._fh.write(msg + "\n")

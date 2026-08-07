@@ -9,6 +9,7 @@ from kirk.transporter import Transporter
 
 
 async def main() -> None:
+    """Initialize and run Kirk IRC client from configuration."""
     with open(os.path.expanduser("~/.kirk.toml"), "rb") as fh:
         config = tomllib.load(fh)
 

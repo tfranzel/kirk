@@ -15,12 +15,14 @@ OPT_NUMBER_MAPPING = dict(zip("¡™£¢∞§¶•ªº", range(10), strict=False
 
 
 class ExitInterrupt(Exception):
+    """Raised when user requests exit from UI."""
+
     pass
 
 
 @dataclass
 class Window:
-    """Stateful scrollable window tab"""
+    """Represents a scrollable window tab with buffer state."""
 
     name: str
     buf: Buffer[IrcRawMessage]
@@ -31,18 +33,21 @@ class Window:
     dirty_buf_before = False
 
     def page_up(self) -> None:
+        """Scroll up one page, freezing buffer view."""
         if self.page == 0:
             # freeze buffer view on scroll start
             self.buf_idx_frozen = self.buf_idx_viewed
         self.page += 1
 
     def page_down(self) -> None:
+        """Scroll down one page, unfreezing at bottom."""
         self.page = max(0, self.page - 1)
         if self.page == 0:
             # release buffer fix on scroll end
             self.buf_idx_frozen = None
 
     def page_reset(self) -> None:
+        """Reset to bottom of buffer."""
         self.page = 0
         self.buf_idx_frozen = None
 
@@ -56,18 +61,21 @@ class Window:
 
     @property
     def dirty_view(self) -> bool:
+        """Whether the live view has changed due to buffer changes."""
         return self.page == 0 and self.dirty_buf
 
     @property
     def dirty_buf(self) -> bool:
+        """Whether messages were added to buf since it was last displayed."""
         return self.buf_idx_viewed != self.buf.idx
 
     def reset_buf(self) -> None:
+        """Mark current state of buffer as viewed."""
         self.buf_idx_viewed = self.buf.idx
 
 
 class Kirk:
-    """Simple UI for Basic IRC Client"""
+    """Terminal-based UI for IRC clients with tabbed windows and scrolling."""
 
     def __init__(self, clients: Sequence[IrcClient], loop: AbstractEventLoop):
         self.t = Terminal()

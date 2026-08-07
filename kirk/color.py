@@ -7,6 +7,7 @@ from blessed.colorspace import X11_COLORNAMES_TO_RGB, RGBColor
 
 
 def build_color_map() -> list[tuple[str, RGBColor]]:
+    """Build a map of visually distinct colors for nick colorization."""
     selection: list[tuple[str, RGBColor]] = []
 
     for name, rgb in X11_COLORNAMES_TO_RGB.items():
@@ -29,6 +30,7 @@ COLOR_LIST = build_color_map()
 
 
 def name_to_rgb(name: str) -> RGBColor:
+    """Convert a name to a consistent RGB color for colorization."""
     return COLOR_LIST[sum(ord(c) for c in name) % len(COLOR_LIST)][1]
 
 
@@ -65,10 +67,10 @@ IRC_FORMAT_RE = re.compile(r"(?P<format>[\x02\x1d\x1e\x1f])(?P<text>.*?)(?P=form
 
 def irc_to_ansi(text: str, term: Terminal) -> str:
     """
-    Maps encountered MIRC color/formatting sequences (recycled ASCII control section)
-    to ANSI sequences that can be displayed in terminal.
+    Convert IRC/mIRC color/formatting codes to ANSI terminal sequences.
+    Returns text with ANSI escape sequences for terminal display.
 
-    https://modern.ircdocs.horse/formatting
+    Reference: https://modern.ircdocs.horse/formatting
     """
     for match in IRC_COLOR_RE.finditer(text):
         try:
