@@ -163,8 +163,11 @@ class Kirk:
         elif val.code == curses.KEY_ENTER:
             # send it
             self.process_prompt()
+        elif val.is_sequence:
+            # Do nothing for multibyte sequences (e.g. uncaught modifiers, arrow keys, etc.).
+            # This is safe for multibyte Unicode (é, 日) and single-codepoint emoji
+            pass
         elif val:
-            # just add entered character to buffer
             self.prompt_buf.append(str(val))
             self.dirty = True
         else:

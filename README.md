@@ -86,6 +86,7 @@ import asyncio
 from kirk.client import IrcClient
 from kirk.kirk import Kirk
 
+
 async def main() -> None:
     loop = asyncio.get_running_loop()
     client = IrcClient(
