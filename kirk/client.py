@@ -476,20 +476,27 @@ class IrcClient:
                 self.server_buf.insert(message)
             case "NOTICE":
                 if (
-                    not self.mode
-                    and message.params[0] == "*"
+                    message.params[0] == "*"
+                    and message.prefix
                     and message.prefix_nick not in self.servers
                 ):
                     # This is likely the first message we received from this server
                     self.servers.append(message.prefix_nick)
 
                 # Centralize special service notices
-                if message.prefix_nick in ("NickServ", "HostServ", "ChanServ"):
+                if not message.prefix or message.prefix_nick in ("NickServ", "HostServ", "ChanServ"):
                     self.server_buf.insert(message)
                 else:
                     self.get_buf(message.prefix_nick).insert(message)
             case "001" | "002" | "003" | "004" | "005":
-                # server details on connect
+                # server details on connect - make sure origin prefix is marked as server
+                if (
+                    message.command == "001"
+                    and message.prefix
+                    and message.prefix_nick not in self.servers
+                ):
+                    self.servers.append(message.prefix_nick)
+
                 self.server_buf.insert(message)
             case "250" | "251" | "252" | "253" | "254" | "255" | "265" | "266":
                 # server stats on connect
