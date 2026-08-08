@@ -14,8 +14,8 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "blessed>=1.21.0",
-    "cryptography>=44.0.3",
+    "blessed>=1.47.0",
+    "cryptography>=50.0.0",
 ]
 
 [dependency-groups]
@@ -43,6 +43,7 @@ ignore = [
     "E501",   # long lines
     "E741",   # variables named i O l, get a proper editor font
     "SIM108", # ternary is not always better
+    "B911", #
 ]
 
 [tool.mypy]

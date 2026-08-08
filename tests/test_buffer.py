@@ -1,4 +1,4 @@
-from kirk.client import Buffer, is_channel_name
+from kirk.client import Buffer
 
 
 def test_buffer_fixed_iteration():
@@ -44,8 +44,12 @@ def test_buffer_fixed_iteration():
     assert list(buf.fixed_iter(5)) == [4, 3]
 
 
-def test_channel_name():
-    assert is_channel_name("#foobar")
+def test_buffer_empty():
+    """Test empty buffer behavior."""
+    buf = Buffer[str](5)
+    assert len(buf) == 0
+    assert list(buf) == []
+    assert buf.idx == 0
 
 
 def test_buffer_iter():

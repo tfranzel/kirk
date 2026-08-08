@@ -1,13 +1,22 @@
 import curses
+import itertools
 import traceback
 from asyncio import AbstractEventLoop
-from collections.abc import Sequence
+from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from blessed import Terminal
 from blessed.keyboard import Keystroke
 
-from kirk.client import DCC, Buffer, IrcClient, IrcRawMessage, is_channel_name
+from kirk.client import (
+    CHANNEL_PERM_MAPPING,
+    DCC,
+    Buffer,
+    ChannelUserPerm,
+    IrcClient,
+    IrcRawMessage,
+)
 from kirk.color import irc_to_ansi, name_to_rgb
 from kirk.transporter import Transporter
 
@@ -30,7 +39,7 @@ class Window:
     buf_idx_frozen: int | None = None
     page: int = 0
     header: str = ""
-    dirty_buf_before = False
+    dirty_buf_before: bool = False
 
     def page_up(self) -> None:
         """Scroll up one page, freezing buffer view."""
@@ -118,7 +127,7 @@ class Kirk:
         """Switch to next client. Completely clear & rebuild the UI state"""
         self.client_idx = (self.client_idx + 1) % len(self.clients)
         self.current_window_name = self.client.server_buf_name
-        self.sync_windows()
+        self.sync_client()
 
     def process_input(self, val: Keystroke) -> None:
         if val.code == curses.KEY_PPAGE:
@@ -179,7 +188,7 @@ class Kirk:
             return
 
         command, args = self.parse_prompt()
-        coro = None
+        coro: Coroutine[Any, Any, None] | None = None
 
         if command == "exit":
             for client in self.clients:
@@ -187,25 +196,29 @@ class Kirk:
             raise ExitInterrupt()
         elif command == "save":
             Transporter.beam_down(self)
-        elif command == "quit":
+        elif command in ("help", "h"):
+            help_text = "TODO WRITE\nSOME HELP\nTEXT FOR THE COMMANDS"
+            for line in help_text.split("\n"):
+                self.current_window.buf.insert(IrcRawMessage(prefix=None, command="HELP", params=[line]))
+        elif command in ("q", "quit"):
             coro = self.client.quit()
-        elif command == "list":
+        elif command in ("l", "list"):
             coro = self.client.list()
         elif command == "part":
-            if is_channel_name(self.current_window_name):
+            if self.client.is_channel_name(self.current_window_name):
                 coro = self.client.part_channel(self.current_window_name)
         elif command == "close":
-            to_be_closed = self.current_window_name
+            to_be_closed = self.current_window
             self.switch_window_relative(offset=-1)
-            coro = self.client.delete(to_be_closed)
-            del self.windows[to_be_closed]
+            coro = self.client.delete(to_be_closed.name)
+            del self.windows[to_be_closed.name]
         elif command in ("j", "join") and len(args) == 1:
             coro = self.client.join_channel(args[0])
         elif command == "nick" and len(args) == 1:
             coro = self.client.change_nick(args[0])
         elif command == "me":
             coro = self.client.send_ctcp_request(self.current_window_name, f"ACTION {' '.join(args)}")
-        elif command == "msg" and len(args) > 1:
+        elif command in ("m", "msg") and len(args) > 1:
             recipient, text = args[0], " ".join(args[1:])
             coro = self.client.send_message(
                 recipient=recipient, text=text, encrypt=recipient in self.client.keys
@@ -214,10 +227,23 @@ class Kirk:
             recipient, text = args[0], " ".join(args[1:])
             coro = self.client.send_ctcp_request(recipient=recipient, text=text)
         elif command == "members":
-            if is_channel_name(self.current_window_name):
+            if self.client.is_channel_name(self.current_window_name):
                 channel = self.client.channels[self.current_window_name]
-                channel.buf.insert(IrcRawMessage(None, "MEMBERS", [" ".join(channel.users)]))
-        elif command == "s":
+                users = map(
+                    lambda pu: f"{CHANNEL_PERM_MAPPING[pu[0]]}{pu[1]}",
+                    sorted((max(p or {ChannelUserPerm.BASE}), u) for u, p in channel.users.items()),
+                )
+                for batch in itertools.batched(users, self.t.width // 15):
+                    channel.buf.insert(IrcRawMessage(None, "MEMBERS", [" ".join(batch)]))
+        elif command == "grep":
+            target_buf = self.client.get_buf(self.current_window_name)
+            filtered_buf = Buffer[IrcRawMessage](target_buf.size)
+            filter_term = " ".join(args).lower()
+            for m in target_buf:
+                if filter_term in "".join(m.params).lower():
+                    filtered_buf.insert(m)
+            self.windows[f"grep {filter_term}"] = Window(f"grep {filter_term}", filtered_buf)
+        elif command == "switch":
             self.switch_client()
         elif command == "raw" and len(args) > 0:
             coro = self.client.send_cmd(args[0], args[1:])
@@ -251,7 +277,7 @@ class Kirk:
         else:
             return "", prompt
 
-    def sync_windows(self) -> None:
+    def sync_client(self) -> None:
         """Check for new channels & chats in client, watch for topic updates"""
         # enforce server buf being initialized on UI start
         self.client.server_buf  # noqa: B018
@@ -274,11 +300,12 @@ class Kirk:
                 window.header = new_header
                 self.dirty = True
 
-        # expose internal logging messages
-        # if "log" not in self.windows:
-        #     self.windows["log"] = Window("log", self.client.log_buf)
+        if self.client.attention_requested:
+            print("\x07", end="")
 
-    def format_message(self, msg: IrcRawMessage, nick_offset: int = 0) -> tuple[tuple[str, str], ...]:
+    def format_message(
+        self, msg: IrcRawMessage, nick_offset: int = 0, cmd_offset: int = 0
+    ) -> tuple[tuple[str, str], ...]:
         date_str = self.t.webgray(f"[{msg.ts.strftime('%H:%M:%S')}]")
         colorizer = self.t.color_rgb(*name_to_rgb(msg.prefix_nick))
         colorized_nick = self.t.ljust(colorizer(f"<{msg.prefix_nick}>"), nick_offset + 2)
@@ -286,9 +313,8 @@ class Kirk:
 
         if msg.command == "PRIVMSG":
             _target, text = msg.params
-
-            head=f"{date_str} {colorized_nick} {divider} "
-            body=irc_to_ansi(text, self.t)
+            cmd = ""
+            body = irc_to_ansi(text, self.t)
         elif msg.command == "NOTICE" or self.is_server_window:
             # 1. NOTICE can also be colorized, but still differentiate from PRIVMSG
             # 2. don't mute server window text
@@ -297,34 +323,41 @@ class Kirk:
             else:
                 text = " ".join(msg.params)
 
-            head=f"{date_str} {colorized_nick} {divider} {self.t.webgray(msg.command):<4} {divider} "
-            body=irc_to_ansi(text, self.t)
+            cmd = self.t.webgray(msg.command)
+            body = irc_to_ansi(text, self.t)
         else:
             # tone down non-text message in regular chats
-            head=f"{date_str} {colorized_nick} {divider} {self.t.webgray(msg.command):<4} {divider} "
-            body=self.t.webgray(" ".join(msg.params))
+            cmd = self.t.webgray(msg.command)
+            body = self.t.webgray(" ".join(msg.params))
 
-        return self._split_message(head, body)
+        return self._split_message(
+            head=f"{date_str} {colorized_nick} {divider} {self.t.ljust(cmd, cmd_offset)} {divider} ",
+            body=body,
+            divider=divider,
+        )
 
-    def _split_message(self, head, body) -> tuple[tuple[str, str], ...]:
+    def _split_message(self, head: str, body: str, divider: str) -> tuple[tuple[str, str], ...]:
+        """Split messages that are too long for terminal into chunks"""
         head_len = self.t.length(head)
         body_len = self.t.length(body)
 
         if body_len + head_len > self.t.width:
             body_width = self.t.width - head_len
             body_split = tuple(body[i : i + body_width] for i in range(0, len(body), body_width))
-            head_split = (head,) + tuple(" " * head_len for _ in range(len(body_split) - 1))
+            head_split = (head,) + tuple(
+                self.t.rjust(f"{divider} ", head_len) for _ in range(len(body_split) - 1)
+            )
             return tuple(zip(head_split, body_split, strict=True))
         else:
-            return (head, body),
+            return ((head, body),)
 
     def render_interface_line(self, line: str) -> None:
         print(self.t.on_darkolivegreen(self.t.ljust(line, self.t.width)), end="")
 
-    def render_dcc_line(self, dcc: DCC, name_offset: int) -> None:
+    def render_dcc_line(self, dcc: DCC, name_offset: int, total_width: int) -> None:
         percentage = dcc.bytes_received / dcc.size
         title = self.t.ljust(f"{dcc.source}{self.t.gold2(':')} {dcc.filename} ", name_offset + 3)
-        bar_width = self.t.width - self.t.length(title) - 2
+        bar_width = total_width - self.t.length(title) - 2
         bar = (int(bar_width * percentage) * "#").ljust(bar_width)
 
         if dcc.verified:
@@ -335,7 +368,7 @@ class Kirk:
         else:
             bar = self.t.tomato(bar)
 
-        self.render_interface_line(f"{title}{self.t.webgray('[')}{bar}{self.t.webgray(']')}")
+        print(f"{title}{self.t.webgray('[')}{bar}{self.t.webgray(']')}", end="")
 
     def render_dialog(self, text: str) -> None:
         text_width = len(text) + 4
@@ -351,26 +384,22 @@ class Kirk:
             print(self.t.black_on_tomato(text_width * " "), end="")
 
     def render(self) -> None:
-        # skip re-render, if any visible changes had occurred, i.e. input, indicators, or current window content
+        # skip re-render, if no visible changes had occurred, i.e. input, indicators, or current window content
         if (
             not self.dirty
             and not self.current_window.dirty_view
             and all(w.dirty_buf_before == w.dirty_buf for w in self.windows.values())
-            and all(dcc.complete and dcc.verified for dcc in self.client.dcc)  # TODO
+            and all(dcc.complete for dcc in self.client.dcc)  # TODO
         ):
             return
-
-        status_bar_height = min(len(self.client.dcc), 3)
-        if status_bar_height:
-            status_bar_height += 1  # added divider line
 
         self.dirty = False
         self._frame += 1
 
         self.render_topic_line()
-        self.render_chat_window(status_bar_height)
-        self.render_tabs(status_bar_height)
-        self.render_status_bar(status_bar_height)
+        self.render_chat_window()
+        self.render_tabs()
+        self.render_dcc()
         self.render_prompt()
 
         if self.error_msg:
@@ -384,24 +413,52 @@ class Kirk:
         with self.t.location(0, 0):
             self.render_interface_line(irc_to_ansi(self.current_window.header, self.t))
 
-    def render_status_bar(self, status_bar_height: int) -> None:
-        if not status_bar_height:
+    def render_box(self, inner_height: int, inner_width: int) -> tuple[int, int, int, int]:
+        """Draw a box with '-' edges and '+' corners, anchored to the top-right of the window."""
+        width = inner_width + 2
+        height = inner_height + 2  # inner rows + top/bottom border
+        right = self.t.width - 1
+        top = 1
+        left = right - width + 1
+        bottom = top + height - 1
+
+        with self.t.location(left, top):
+            print(self.t.darkolivegreen("+" + "-" * (width - 2) + "+"), end="")
+        for y in range(top + 1, bottom):
+            with self.t.location(left, y):
+                print(self.t.darkolivegreen("|"), end="")
+            with self.t.location(right, y):
+                print(self.t.darkolivegreen("|"), end="")
+        with self.t.location(left, bottom):
+            print(self.t.darkolivegreen("+" + "-" * (width - 2) + "+"), end="")
+
+        return top, left, bottom, right
+
+    def render_dcc(self) -> None:
+        if not self.client.dcc:
             return
 
-        # divider
-        with self.t.location(0, self.t.height - 1 - status_bar_height):
-            self.render_interface_line(self.t.webgray(self.t.width * "\u2014"))
+        recent_dccs = self.client.dcc[-5:]
+        name_column_width = max(len(dcc.filename) + len(dcc.source) for dcc in recent_dccs)
 
-        recent_dccs = self.client.dcc[-3:]
-        dcc_name_offset = max(len(dcc.filename) + len(dcc.source) for dcc in recent_dccs)
+        top, left, bottom, right = self.render_box(
+            inner_height=len(recent_dccs),
+            inner_width=max([name_column_width + 5 + 10, self.t.width * 2 // 5]),
+        )
+
         for idx, dcc in enumerate(reversed(recent_dccs)):
-            with self.t.location(0, self.t.height - 2 - idx):
-                self.render_dcc_line(dcc, dcc_name_offset)
+            with self.t.location(left + 1, top + 1 + idx):
+                self.render_dcc_line(dcc, name_column_width, right - left - 1)
 
-    def render_chat_window(self, offset: int):
-        chat_window_height = self.t.height - 3 - offset
+    def render_chat_window(self) -> None:
+        chat_window_height = self.t.height - 3
         buf_page = self.current_window.get_buf_page(chat_window_height)
-        nick_offset = min(max([len(message.prefix_nick) for message in buf_page] or [0]), 50)
+
+        nick_offset = max([len(message.prefix_nick) for message in buf_page] or [0])
+        cmd_offset = max(
+            [len(message.command) for message in buf_page if message.command != "PRIVMSG"] or [0]
+        )
+
         if self.current_window.page == 0:
             self.current_window.reset_buf()
 
@@ -414,7 +471,7 @@ class Kirk:
                     print(self.t.clear_eol, end="")
                 line_idx -= 1
             else:
-                lines = self.format_message(buf_page[buf_idx], nick_offset)
+                lines = self.format_message(buf_page[buf_idx], nick_offset, cmd_offset)
                 buf_idx += 1
                 for head, body in reversed(lines):
                     with self.t.location(0, line_idx):
@@ -423,11 +480,11 @@ class Kirk:
 
         # page indication
         if self.current_window.page != 0:
-            with self.t.location(self.t.width - 3, 2):
-                print(self.t.gold2(str(self.current_window.page)), end="")
+            with self.t.location(self.t.width - 5, self.t.height - 4):
+                print(self.t.on_darkolivegreen(self.t.rjust(str(self.current_window.page), 3)), end="")
 
-    def render_tabs(self, offset: int) -> None:
-        with self.t.location(0, self.t.height - 2 - offset):
+    def render_tabs(self) -> None:
+        with self.t.location(0, self.t.height - 2):
             tab_line_items = []
             for idx, window in enumerate(self.windows.values()):
                 window.dirty_buf_before = window.dirty_buf
@@ -450,7 +507,7 @@ class Kirk:
                 f"{client_selector} {self.t.webgray('-')} {client_mode} {self.t.webgray('-')} {tab_line}"
             )
 
-    def render_prompt(self):
+    def render_prompt(self) -> None:
         with self.t.location(0, self.t.height - 1):
             prompt = "".join(self.prompt_buf)
             command, args = self.parse_prompt()
@@ -467,7 +524,7 @@ class Kirk:
             val = Keystroke()
             while True:
                 try:
-                    self.sync_windows()
+                    self.sync_client()
                     self.process_input(val)
                     self.render()
                 except ExitInterrupt:

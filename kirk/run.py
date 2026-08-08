@@ -28,6 +28,10 @@ def parse_args() -> argparse.Namespace:
         "--log", action="store_true", help="Log session activity to file instead of discarding it."
     )
     parser.add_argument(
+        "--dcc-dir",
+        help="Directory to save incoming DCC file transfers to.",
+    )
+    parser.add_argument(
         "--config",
         default="~/.kirk.toml",
         help="Path to the TOML config file (default: ~/.kirk.toml). Ignored if --host and --nick are given.",
@@ -45,6 +49,7 @@ async def main(args: argparse.Namespace) -> None:
                 host=args.host,
                 nick=args.nick,
                 ssl=args.ssl,
+                dcc_dir=os.path.expanduser(args.dcc_dir) if args.dcc_dir else None,
                 log_mode="file" if args.log else "none",
             )
         ]
@@ -89,7 +94,6 @@ async def main(args: argparse.Namespace) -> None:
         Transporter.beam_up(kirk)
     print("1/2 impulse forward ...")
     _ = loop.run_in_executor(None, kirk.run)
-    print("Priming warp drive ...")
     try:
         await asyncio.gather(*(c.run() for c in clients))
     finally:

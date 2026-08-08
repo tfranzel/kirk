@@ -1,6 +1,7 @@
 import asyncio
 import ipaddress
 import logging
+import random
 import ssl
 import struct
 import traceback
@@ -10,6 +11,7 @@ from collections.abc import Coroutine, Iterator, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
 from typing import Any, Literal
 
@@ -17,15 +19,36 @@ from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger("IrcClient")
 
-CHANNEL_PREFIXES = "&#+!"
-
-
-def is_channel_name(name: str) -> bool:
-    return any(name.startswith(prefix) for prefix in CHANNEL_PREFIXES)
-
 
 class ServerTerminationError(Exception):
     pass
+
+
+@verify(UNIQUE)
+class ChannelUserPerm(StrEnum):
+    OWNER = "q"
+    ADMIN = "a"
+    OPERATOR = "o"
+    HALF_OP = "h"
+    VOICE = "v"
+    BASE = ""
+
+    def __lt__(self, other: "ChannelUserPerm") -> bool:  # type: ignore[override]
+        order = {p: o for o, p in enumerate(ChannelUserPerm)}
+        return order[self] < order[other]
+
+
+CHANNEL_PERM_MAPPING: dict[ChannelUserPerm, str] = {
+    ChannelUserPerm.OWNER: "~",
+    ChannelUserPerm.ADMIN: "&",
+    ChannelUserPerm.OPERATOR: "@",
+    ChannelUserPerm.HALF_OP: "%",
+    ChannelUserPerm.VOICE: "+",
+    ChannelUserPerm.BASE: "",
+}
+CHANNEL_PERM_MAPPING_REV: dict[str, ChannelUserPerm] = {
+    v: k for k, v in CHANNEL_PERM_MAPPING.items() if k
+}
 
 
 @dataclass
@@ -57,7 +80,7 @@ class Buffer[T]:
     """Fixed-length circular buffer"""
 
     def __init__(self, size: int | None = None):
-        self.size = size or 1024
+        self.size = size or 4096
         self._buf: list[T] = []
         self.len = 0
         self.idx = 0
@@ -112,7 +135,7 @@ class IrcChannel:
         self.mode = ""
         self.topic = ""
         self.topic_origin: tuple[str, str] = ("", "")
-        self.users: set[str] = set()
+        self.users: dict[str, set[ChannelUserPerm]] = {}
 
 
 class ChannelDict(defaultdict[str, IrcChannel]):
@@ -173,7 +196,7 @@ class IrcClient:
         self.host = host
         self.port = port or 6697 if ssl else 6667
         self.nick = nick
-        self.servers: list[str] = []
+        self.server_aliases: list[str] = []
         self.mode: set[str] = set()
         self.auto_join = auto_join or []
         self.auth = auth
@@ -184,12 +207,12 @@ class IrcClient:
         self.chats = defaultdict[str, Buffer[IrcRawMessage]](Buffer)
         self.dcc: list[DCC] = []
         self.log_mode = log_mode
-        self.log_buf = Buffer[IrcRawMessage](512)
         self._reader: StreamReader = None  # type: ignore[assignment]
         self._writer: StreamWriter = None  # type: ignore[assignment]
         self._futures = set[Future[Any] | Task[Any]]()
+        self._attention: bool = False
         if log_mode == "file":
-            self._fh = open(f"kirk_{datetime.now().isoformat()}.log", "w")  # noqa: SIM115
+            self._fh = open(f"kirk_{datetime.now().isoformat()}_{random.randint(100, 999)}.log", "w")  # noqa: SIM115
 
     @property
     def server_buf(self) -> Buffer[IrcRawMessage]:
@@ -199,18 +222,24 @@ class IrcClient:
     def server_buf_name(self) -> str:
         return self.host
 
+    @property
+    def attention_requested(self) -> bool:
+        result, self._attention = self._attention, False
+        return result
+
     def get_buf(self, name: str) -> Buffer[IrcRawMessage]:
-        if name == self.host or name in self.servers:
+        if name == self.host or name in self.server_aliases:
             return self.server_buf
-        elif is_channel_name(name):
+        elif self.is_channel_name(name):
             return self.channels[name].buf
         else:
             return self.chats[name]
 
     async def delete(self, name: str) -> None:
-        if name == self.host or name in self.servers:
+        """Remove channel/chat from client state"""
+        if name == self.host or name in self.server_aliases:
             pass
-        elif is_channel_name(name):
+        elif self.is_channel_name(name):
             await self.part_channel(name)
             del self.channels[name]
         else:
@@ -454,6 +483,19 @@ class IrcClient:
 
         return IrcRawMessage(prefix=prefix, command=command, params=args + trailing)
 
+    @classmethod
+    def process_mode_str(cls, mode_str: str) -> Iterator[tuple[bool, str]]:
+        for mode in mode_str[1:]:
+            match mode_str[0]:
+                case "+":
+                    yield True, mode
+                case "-":
+                    yield False, mode
+
+    @classmethod
+    def is_channel_name(cls, name: str) -> bool:
+        return any(name.startswith(prefix) for prefix in "&#+!")
+
     async def process_message(self, message: IrcRawMessage) -> None:
         # allow to patch in alternate functionality
         if callback := getattr(self, f"on_{message.command.lower()}_callback", None):
@@ -468,30 +510,50 @@ class IrcClient:
             case "PRIVMSG":
                 await self.process_privmsg(message)
             case "MODE":
-                target, mode_str = message.params[:2]
-                if target == self.nick:
-                    modifier, *modes = mode_str  # type: tuple[str, list[str]] # type: ignore[misc]
-                    for mode in modes:
-                        match modifier:
-                            case "+":
-                                self.mode.add(mode)
-                            case "-":
-                                self.mode.discard(mode)
+                if len(message.params) == 2:
+                    # personal user mode
+                    user, mode_str = message.params
+                    for add, mode in self.process_mode_str(mode_str):
+                        if add:
+                            self.mode.add(mode)
+                        else:
+                            self.mode.discard(mode)
+
                     self.server_buf.insert(message)
+                elif len(message.params) == 3:
+                    # mode for user in channel
+                    chan, mode_str, user = message.params
+                    for add, mode in self.process_mode_str(mode_str):
+                        if mode == "b":
+                            pass  # ignore bans; also mapping a mask is tricky
+                        elif user not in self.channels[chan].users or mode not in ChannelUserPerm:
+                            self.log_error(f"MODE set failure for {mode_str} on user {user} in {chan}")
+                        elif add:
+                            self.channels[chan].users[user].add(ChannelUserPerm(mode))
+                        else:
+                            self.channels[chan].users[user].discard(ChannelUserPerm(mode))
+
+                    self.get_buf(chan).insert(message)
                 else:
-                    self.get_buf(target).insert(message)
+                    self.log_error(f"MODE message unexpected {message.params}")
+                    return
             case "NICK":
+                new_nick = message.params[0]
                 if message.prefix == self.nick:
-                    self.nick = message.params[0]
-                self.server_buf.insert(message)
+                    self.nick = new_nick
+                # update users in channels
+                for channel in self.channels.values():
+                    if message.prefix_nick in channel.users:
+                        channel.users[new_nick] = channel.users.pop(message.prefix_nick)
+                        channel.buf.insert(message)
             case "NOTICE":
                 if (
                     message.params[0] == "*"
                     and message.prefix
-                    and message.prefix_nick not in self.servers
+                    and message.prefix_nick not in self.server_aliases
                 ):
                     # This is likely the first message we received from this server
-                    self.servers.append(message.prefix_nick)
+                    self.server_aliases.append(message.prefix_nick)
 
                 # Centralize special service notices
                 if not message.prefix or message.prefix_nick in ("NickServ", "HostServ", "ChanServ"):
@@ -499,17 +561,26 @@ class IrcClient:
                 else:
                     self.get_buf(message.prefix_nick).insert(message)
             case "001" | "002" | "003" | "004" | "005":
+                # RPL_WELCOME | RPL_YOURHOST | RPL_CREATED | RPL_MYINFO | RPL_BOUNCE
                 # server details on connect - make sure origin prefix is marked as server
                 if (
                     message.command == "001"
                     and message.prefix
-                    and message.prefix_nick not in self.servers
+                    and message.prefix_nick not in self.server_aliases
                 ):
-                    self.servers.append(message.prefix_nick)
+                    self.server_aliases.append(message.prefix_nick)
 
                 self.server_buf.insert(message)
+            case "221":
+                # RPL_UMODEIS - user mode string
+                self.server_buf.insert(message)
             case "250" | "251" | "252" | "253" | "254" | "255" | "265" | "266":
+                # RPL_STATSCONN | RPL_LUSERCLIENT | RPL_LUSEROP | RPL_LUSERUNKNOWN |
+                # RPL_LUSERCHANNELS | RPL_LUSERME | RPL_LOCALUSERS | RPL_GLOBALUSERS
                 # server stats on connect
+                self.server_buf.insert(message)
+            case "305" | "306":
+                # RPL_UNAWAY | RPL_NOWAWAY
                 self.server_buf.insert(message)
             case "322" | "323":
                 # RPL_LIST / RPL_LISTEND - channel listing
@@ -517,8 +588,11 @@ class IrcClient:
             case "372" | "375" | "376":
                 # MOTD related
                 self.server_buf.insert(message)
+            case "391":
+                # RPL_TIME
+                self.server_buf.insert(message)
             case "396":
-                # NO OFFICIAL CODE - RPL_HOSTHIDDEN
+                # RPL_HOSTHIDDEN
                 self.server_buf.insert(message)
             case "331":
                 # RPL_NOTOPIC
@@ -528,13 +602,21 @@ class IrcClient:
                 _, chan_name, topic = message.params
                 self.channels[chan_name].topic = topic
             case "333":
+                # RPL_TOPICWHOTIME
                 _, chan_name, topic_author, topic_time = message.params
                 self.channels[chan_name].topic_origin = (topic_author, topic_time)
             case "353":
                 # RPL_NAMREPLY
-                chan_name = message.params[2]
-                for user in message.params[3].split():
-                    self.channels[chan_name].users.add(user.lstrip("+&"))
+                # Example: 353 Peter @ #chan +Daniel Jack Dorothy
+                _, _chan_mode, chan_name, users = message.params
+
+                for user in users.split():
+                    # capture user prefixes like + & ~ and store user with mapped permission in registry
+                    if user.startswith(tuple(CHANNEL_PERM_MAPPING_REV.keys())):
+                        self.channels[chan_name].users[user[1:]] = {CHANNEL_PERM_MAPPING_REV[user[0]]}
+                    else:
+                        self.channels[chan_name].users[user] = set()
+
                 self.channels[chan_name].buf.insert(message)
             case "366":
                 # RPL_ENDOFNAMES
@@ -556,19 +638,20 @@ class IrcClient:
                 self.server_buf.insert(message)
             case "JOIN":
                 chan_name = message.params[0]
-                self.channels[chan_name].users.add(message.prefix_nick)
+                self.channels[chan_name].users[message.prefix_nick] = set()
                 self.channels[chan_name].buf.insert(message)
             case "PART":
                 chan_name = message.params[0]
+                self.channels[chan_name].users.pop(message.prefix_nick, None)
                 self.channels[chan_name].buf.insert(message)
             case "QUIT":
                 for channel in self.channels.values():
                     if message.prefix_nick in channel.users:
-                        channel.users.discard(message.prefix_nick)
+                        del channel.users[message.prefix_nick]
                         channel.buf.insert(message)
             case "KICK":
                 chan_name, nick = message.params[:2]
-                self.channels[chan_name].users.discard(nick)
+                self.channels[chan_name].users.pop(nick, None)
                 self.channels[chan_name].buf.insert(message)
             case "ERROR":
                 self.server_buf.insert(message)
@@ -576,8 +659,8 @@ class IrcClient:
                 self.log_error(message, "Unknown command")
                 self.server_buf.insert(message)
 
-    def log_error(self, message: IrcRawMessage | str, head: str | None = None) -> None:
-        self.log(message, head, level=logging.ERROR)
+    def log_error(self, message: IrcRawMessage | str, category: str | None = None) -> None:
+        self.log(message, category, level=logging.ERROR)
 
     def log(
         self,
@@ -590,8 +673,6 @@ class IrcClient:
             f":{category or (message.command if isinstance(message, IrcRawMessage) else 'N/A')}"
             f":{message}"
         )
-        if not isinstance(message, IrcRawMessage):
-            self.log_buf.insert(IrcRawMessage(category or "INT", str(level), [message]))
         match self.log_mode:
             case "file":
                 self._fh.write(msg + "\n")
