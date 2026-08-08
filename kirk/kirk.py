@@ -278,7 +278,7 @@ class Kirk:
         # if "log" not in self.windows:
         #     self.windows["log"] = Window("log", self.client.log_buf)
 
-    def format_message(self, msg: IrcRawMessage, nick_offset: int = 0) -> str:
+    def format_message(self, msg: IrcRawMessage, nick_offset: int = 0) -> tuple[tuple[str, str], ...]:
         date_str = self.t.webgray(f"[{msg.ts.strftime('%H:%M:%S')}]")
         colorizer = self.t.color_rgb(*name_to_rgb(msg.prefix_nick))
         colorized_nick = self.t.ljust(colorizer(f"<{msg.prefix_nick}>"), nick_offset + 2)
@@ -286,7 +286,9 @@ class Kirk:
 
         if msg.command == "PRIVMSG":
             _target, text = msg.params
-            return f"{date_str} {colorized_nick} {divider} {irc_to_ansi(text, self.t)}"
+
+            head=f"{date_str} {colorized_nick} {divider} "
+            body=irc_to_ansi(text, self.t)
         elif msg.command == "NOTICE" or self.is_server_window:
             # 1. NOTICE can also be colorized, but still differentiate from PRIVMSG
             # 2. don't mute server window text
@@ -294,11 +296,27 @@ class Kirk:
                 text = " ".join(msg.params[1:])
             else:
                 text = " ".join(msg.params)
-            return f"{date_str} {colorized_nick} {divider} {self.t.webgray(msg.command):<4} {divider} {irc_to_ansi(text, self.t)}"
+
+            head=f"{date_str} {colorized_nick} {divider} {self.t.webgray(msg.command):<4} {divider} "
+            body=irc_to_ansi(text, self.t)
         else:
             # tone down non-text message in regular chats
-            text = " ".join(msg.params)
-            return f"{date_str} {colorized_nick} {divider} {self.t.webgray(f'{msg.command:<4} {divider} {text}')}"
+            head=f"{date_str} {colorized_nick} {divider} {self.t.webgray(msg.command):<4} {divider} "
+            body=self.t.webgray(" ".join(msg.params))
+
+        return self._split_message(head, body)
+
+    def _split_message(self, head, body) -> tuple[tuple[str, str], ...]:
+        head_len = self.t.length(head)
+        body_len = self.t.length(body)
+
+        if body_len + head_len > self.t.width:
+            body_width = self.t.width - head_len
+            body_split = tuple(body[i : i + body_width] for i in range(0, len(body), body_width))
+            head_split = (head,) + tuple(" " * head_len for _ in range(len(body_split) - 1))
+            return tuple(zip(head_split, body_split, strict=True))
+        else:
+            return (head, body),
 
     def render_interface_line(self, line: str) -> None:
         print(self.t.on_darkolivegreen(self.t.ljust(line, self.t.width)), end="")
@@ -344,34 +362,72 @@ class Kirk:
 
         status_bar_height = min(len(self.client.dcc), 3)
         if status_bar_height:
-            status_bar_height += 1
+            status_bar_height += 1  # added divider line
 
         self.dirty = False
         self._frame += 1
 
-        # Topic line ------------------------------------------------------------------------------
+        self.render_topic_line()
+        self.render_chat_window(status_bar_height)
+        self.render_tabs(status_bar_height)
+        self.render_status_bar(status_bar_height)
+        self.render_prompt()
+
+        if self.error_msg:
+            self.render_dialog(self.error_msg)
+
+        # DEBUG: frame-counter
+        # with self.t.location(self.t.width - 8, self.t.height - 1):
+        #     print(f"f:{self._frame}", end="")
+
+    def render_topic_line(self) -> None:
         with self.t.location(0, 0):
             self.render_interface_line(irc_to_ansi(self.current_window.header, self.t))
 
-        # chat window -----------------------------------------------------------------------------
-        chat_window_height = self.t.height - 3 - status_bar_height
+    def render_status_bar(self, status_bar_height: int) -> None:
+        if not status_bar_height:
+            return
+
+        # divider
+        with self.t.location(0, self.t.height - 1 - status_bar_height):
+            self.render_interface_line(self.t.webgray(self.t.width * "\u2014"))
+
+        recent_dccs = self.client.dcc[-3:]
+        dcc_name_offset = max(len(dcc.filename) + len(dcc.source) for dcc in recent_dccs)
+        for idx, dcc in enumerate(reversed(recent_dccs)):
+            with self.t.location(0, self.t.height - 2 - idx):
+                self.render_dcc_line(dcc, dcc_name_offset)
+
+    def render_chat_window(self, offset: int):
+        chat_window_height = self.t.height - 3 - offset
         buf_page = self.current_window.get_buf_page(chat_window_height)
         nick_offset = min(max([len(message.prefix_nick) for message in buf_page] or [0]), 50)
         if self.current_window.page == 0:
             self.current_window.reset_buf()
 
-        for line_idx in range(chat_window_height):
-            with self.t.location(0, chat_window_height - line_idx):
-                print(self.t.clear_eol, end="")
-                if line_idx < len(buf_page):
-                    print(self.format_message(buf_page[line_idx], nick_offset), end="")
+        line_idx = chat_window_height
+        buf_idx = 0
+        while line_idx >= 1:
+            if buf_idx >= len(buf_page):
+                # no more messages. clear line
+                with self.t.location(0, line_idx):
+                    print(self.t.clear_eol, end="")
+                line_idx -= 1
+            else:
+                lines = self.format_message(buf_page[buf_idx], nick_offset)
+                buf_idx += 1
+                for head, body in reversed(lines):
+                    with self.t.location(0, line_idx):
+                        print(self.t.clear_eol + f"{head}{body}", end="")
+                        line_idx -= 1
+
         # page indication
         if self.current_window.page != 0:
             with self.t.location(self.t.width - 3, 2):
                 print(self.t.gold2(str(self.current_window.page)), end="")
 
-        # tab line --------------------------------------------------------------------------------
-        with self.t.location(0, self.t.height - 2 - status_bar_height):
+    def render_tabs(self, offset: int) -> None:
+        with self.t.location(0, self.t.height - 2 - offset):
             tab_line_items = []
             for idx, window in enumerate(self.windows.values()):
                 window.dirty_buf_before = window.dirty_buf
@@ -394,17 +450,7 @@ class Kirk:
                 f"{client_selector} {self.t.webgray('-')} {client_mode} {self.t.webgray('-')} {tab_line}"
             )
 
-        # status ----------------------------------------------------------------------------------
-        if status_bar_height:
-            with self.t.location(0, self.t.height - 1 - status_bar_height):
-                self.render_interface_line(self.t.webgray(self.t.width * "\u2014"))
-            recent_dccs = self.client.dcc[-3:]
-            dcc_name_offset = max(len(dcc.filename) + len(dcc.source) for dcc in recent_dccs)
-            for idx, dcc in enumerate(reversed(recent_dccs)):
-                with self.t.location(0, self.t.height - 2 - idx):
-                    self.render_dcc_line(dcc, dcc_name_offset)
-
-        # prompt ----------------------------------------------------------------------------------
+    def render_prompt(self):
         with self.t.location(0, self.t.height - 1):
             prompt = "".join(self.prompt_buf)
             command, args = self.parse_prompt()
@@ -414,13 +460,6 @@ class Kirk:
             secured = self.t.tomato(" secured >>") if secure_adhoc_target or secure_target else ""
 
             print(self.t.clear_eol + f"[{self.client.nick}]{secured} {prompt}", end="")
-
-        if self.error_msg:
-            self.render_dialog(self.error_msg)
-
-        # DEBUG: frame-counter
-        # with self.t.location(self.t.width - 8, self.t.height - 1):
-        #     print(f"f:{self._frame}", end="")
 
     def run(self) -> None:
         with self.t.fullscreen(), self.t.cbreak(), self.t.hidden_cursor(), self.t.notify_on_resize():
