@@ -53,4 +53,4 @@ class Transporter:
 
     @classmethod
     def _serialize(cls, buf: Buffer[Any]) -> list[dict[str, Any]]:
-        return [asdict(m) for m in buf]
+        return [asdict(m) for m in reversed(buf)]

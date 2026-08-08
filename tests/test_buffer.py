@@ -46,3 +46,21 @@ def test_buffer_fixed_iteration():
 
 def test_channel_name():
     assert is_channel_name("#foobar")
+
+
+def test_buffer_iter():
+    buf = Buffer[int](3)
+
+    buf.insert(1)
+    buf.insert(2)
+
+    # not full
+    assert list(buf) == [2, 1]
+    assert list(reversed(buf)) == [1, 2]
+
+    buf.insert(3)
+    buf.insert(4)
+
+    # full
+    assert list(buf) == [4, 3, 2]
+    assert list(reversed(buf)) == [2, 3, 4]

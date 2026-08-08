@@ -75,8 +75,18 @@ class Buffer[T]:
 
     def __iter__(self) -> Iterator[T]:
         """Iterate buffer LIFO (newest first)."""
-        for i in range(self.len):
-            yield self._buf[(self.idx - i - 1) % self.size]
+        if self.len < self.size:
+            yield from reversed(self._buf)
+        else:
+            yield from reversed(self._buf[: self.idx])
+            yield from reversed(self._buf[self.idx :])
+
+    def __reversed__(self) -> Iterator[T]:
+        if self.len < self.size:
+            yield from self._buf
+        else:
+            yield from self._buf[self.idx :]
+            yield from self._buf[: self.idx]
 
     def fixed_iter(self, start: int) -> Iterator[T]:
         """Iterate from fixed start point for scrollback functionality."""
