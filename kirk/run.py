@@ -17,29 +17,70 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--host",
-        help="IRC server host to connect to, e.g. irc.libera.chat. "
-        "If given together with --nick, ~/.kirk.toml is ignored.",
+        help="IRC server host to connect to, e.g. irc.libera.chat.",
     )
     parser.add_argument("--nick", help="Nickname to use on the server.")
     parser.add_argument(
-        "--no-ssl", dest="ssl", action="store_false", default=True, help="Connect without SSL/TLS."
+        "--no-ssl",
+        dest="ssl",
+        action="store_false",
+        default=True,
+        help="Connect without SSL/TLS.",
     )
     parser.add_argument(
-        "--log", action="store_true", help="Log session activity to file instead of discarding it."
+        "--join",
+        nargs="+",
+        metavar="CHANNEL",
+        help="Channel(s) to auto-join, e.g. --join #chan1 #chan2.",
+    )
+    parser.add_argument(
+        "--auth",
+        help="NickServ password to identify with after connecting.",
+    )
+    parser.add_argument(
+        "--key",
+        action="append",
+        metavar="TARGET=FERNETKEY",
+        help=(
+            "E2E encryption key for a channel or nick, e.g. --key '#chan1=KEY'. Repeat for multiple targets. "
+            "Needs to be a 32 byte base64 encoded string, e.g. base64.urlsafe_b64encode(os.urandom(32)). "
+            "Other party needs the exakt same key."
+        ),
     )
     parser.add_argument(
         "--dcc-dir",
         help="Directory to save incoming DCC file transfers to.",
     )
     parser.add_argument(
-        "--config",
-        default="~/.kirk.toml",
-        help="Path to the TOML config file (default: ~/.kirk.toml). Ignored if --host and --nick are given.",
+        "--log",
+        action="store_true",
+        help="Log session activity to file instead of discarding it.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to the TOML config file (default: ~/.kirk.toml). "
+        "Mutually exclusive with all other options!",
+    )
+    args = parser.parse_args()
+
+    if args.config and any(
+        [args.host, args.nick, args.join, args.key, args.log, args.dcc_dir, args.auth, not args.ssl]
+    ):
+        parser.error("argument --config: not allowed with any other argument")
+
+    keys = {}
+    for entry in args.key or []:
+        target, sep, key = entry.partition("=")
+        if not sep:
+            parser.error(f"argument --key: expected TARGET=FERNETKEY, got {entry!r}")
+        keys[target] = key
+    args.key = keys
+
+    return args
 
 
-async def main(args: argparse.Namespace) -> None:
+async def _main(args: argparse.Namespace) -> None:
     """Initialize and run Kirk IRC client from CLI arguments or a configuration file."""
     persistence = False
 
@@ -49,13 +90,26 @@ async def main(args: argparse.Namespace) -> None:
                 host=args.host,
                 nick=args.nick,
                 ssl=args.ssl,
+                auth=args.auth,
+                auto_join=args.join or [],
+                keys=args.key,
                 dcc_dir=os.path.expanduser(args.dcc_dir) if args.dcc_dir else None,
                 log_mode="file" if args.log else "none",
             )
         ]
     else:
-        with open(os.path.expanduser(args.config), "rb") as fh:
-            config = tomllib.load(fh)
+        try:
+            with open(os.path.expanduser(args.config), "rb") as fh:
+                config = tomllib.load(fh)
+        except FileNotFoundError:
+            print(
+                f"You either need to provide at least --host and --nick arguments OR a config "
+                f"file must exist. \nWe search for it at {os.path.expanduser('~/.kirk.toml')}, "
+                f"but you can also give another location with --config PATH.\n\nSee here for examples: "
+                f"https://github.com/tfranzel/kirk#non-exhaustive-example-for-config-file-kirktoml"
+                f"\n\nRun `kirk --help` for more information.\n"
+            )
+            exit(1)
 
         if "client_class" in config["kirk"]:
             *path, class_name = config["kirk"]["client_class"].split(".")
@@ -64,7 +118,8 @@ async def main(args: argparse.Namespace) -> None:
             )
         else:
             client_class = IrcClient
-        persistence = config["kirk"].get("persistence", False)
+
+        persistence = False  # config["kirk"].get("persistence", False)
 
         clients = [
             client_class(
@@ -103,5 +158,9 @@ async def main(args: argparse.Namespace) -> None:
     print("Mission complete!")
 
 
+def main() -> None:
+    asyncio.run(_main(parse_args()), debug=False)
+
+
 if __name__ == "__main__":
-    asyncio.run(main(parse_args()), debug=False)
+    main()

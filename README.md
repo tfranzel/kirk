@@ -18,7 +18,7 @@ fighting above tools.
 * MIRC color/formatting
 * Tabbed layout (`ARROW_LEFT`, `ARROW_RIGHT`)
 * Scrollable buffers (`PAGE_UP`, `PAGE_DOWN`)
-* Multi-server enabled (switch through with `/s`)
+* Multi-server enabled (switch through with `/switch`)
 
 ## Client features
 
@@ -41,12 +41,18 @@ Super simple IRC bot [ollama_chatbot.py](examples/ollama_chatbot.py) that reacts
 ## Running it
 
 By default, Kirk will look into the user's home directory for a startup config file.
-This is just a convenience. Running it yourself is also easy, see [run.py](kirk/run.py).
+This is just a convenience. Most settings can also be reached via CLI. See `kirk --help` for more info.
 
-### Start UI
+### Start UI (ad-hoc with uvx)
 
 ```bash
-python -m kirk.run
+uvx --from git+https://github.com/tfranzel/kirk kirk --host irc.libera.chat --nick NosySpock
+```
+
+### Start UI (after package install)
+
+```bash
+python -m kirk.run --host irc.libera.chat --nick NosySpock
 ```
 
 ### Non-exhaustive example for config file `~/.kirk.toml`
@@ -60,7 +66,7 @@ persistence = false
 
 [[kirk.client]]
 host = "irc.libera.chat"
-nick = "Uhura"
+nick = "NosySpock"
 auto_join = [
     "#testchannel",
 ]
@@ -91,7 +97,7 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
     client = IrcClient(
         host="irc.libera.chat",
-        nick="YourName",
+        nick="NosySpock",
     )
     kirk = Kirk([client], loop)
     # UI is select()-based, so run in a separate thread
