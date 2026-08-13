@@ -204,6 +204,8 @@ class Kirk:
             coro = self.client.quit()
         elif command in ("l", "list"):
             coro = self.client.list()
+        elif command in ("w", "whois") and len(args) == 1:
+            coro = self.client.whois(args[0])
         elif command == "part":
             if self.client.is_channel_name(self.current_window_name):
                 coro = self.client.part_channel(self.current_window_name)

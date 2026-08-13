@@ -308,6 +308,9 @@ class IrcClient:
     async def list(self) -> None:
         await self.send_cmd("LIST")
 
+    async def whois(self, nick: str) -> None:
+        await self.send_cmd("WHOIS", nick)
+
     async def send_message(self, recipient: str, text: str, encrypt: bool = False) -> None:
         if encrypt:
             if not (key := self.keys.get(recipient)):
@@ -596,6 +599,10 @@ class IrcClient:
                 self.server_buf.insert(message)
             case "396":
                 # RPL_HOSTHIDDEN
+                self.server_buf.insert(message)
+            case "311" | "312" | "313" | "314" | "315" | "316" | "317" | "318" | "369" | "671":
+                # RPL_WHOISUSER | RPL_WHOISSERVER | RPL_WHOISOPERATOR | RPL_WHOWASUSER | RPL_ENDOFWHO
+                # RPL_WHOISCHANOP | RPL_WHOISIDLE | RPL_ENDOFWHOIS | RPL_ENDOFWHOWAS | RPL_WHOISSECURE
                 self.server_buf.insert(message)
             case "331":
                 # RPL_NOTOPIC
