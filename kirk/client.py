@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import errno
 import ipaddress
 import logging
 import random
@@ -176,6 +178,7 @@ class IrcClient:
         - https://datatracker.ietf.org/doc/html/rfc2812#section-3.7.3
         - https://datatracker.ietf.org/doc/html/draft-oakley-irc-ctcp-02
         - https://www.alien.net.au/irc/irc2numerics.html
+        - https://modern.ircdocs.horse/formatting
     """
 
     version = "Kirk 0.1.0 (python)"
@@ -709,9 +712,9 @@ class IrcClient:
         except ConnectionResetError:
             self.log_error("Connection reset. Reconnecting ...")
         except OSError as e:
-            if e.errno == 60:
+            if e.errno == errno.ETIMEDOUT:
                 self.log_error("Operation timed out. Reconnecting ...")
-            elif e.errno == 65:
+            elif e.errno == errno.EHOSTUNREACH:
                 self.log_error("No route to host. Reconnecting ...")
             else:
                 raise
@@ -737,4 +740,5 @@ class IrcClient:
             if self.log_mode == "file":
                 self._fh.close()
             self._writer.close()
-            await self._writer.wait_closed()
+            with contextlib.suppress(Exception):
+                await self._writer.wait_closed()
