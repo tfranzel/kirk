@@ -78,7 +78,7 @@ class XdccBot(IrcClient):
 
         if offering:
             size, file = offering
-            self.log(f"Resolved {match['idx']} to {file.name} ({self.format_size(size)}), sending ...")
+            self.log(f"Resolved {match['idx']} to {file.name} ({self.format_size(size)}), sending ...")  # type: ignore[index]
             await self.process_file_transfer_request(requester=requester, file=file)
         else:
             await self.send_message(requester, "Invalid request")

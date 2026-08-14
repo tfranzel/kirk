@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-import httpx
+import httpx  # type: ignore[import-not-found]
 
 from kirk.client import IrcClient, IrcRawMessage
 

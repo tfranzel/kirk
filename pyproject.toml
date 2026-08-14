@@ -52,7 +52,9 @@ ignore = [
 [tool.mypy]
 strict = true
 
-[tool.uv]
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
 
 [tool.hatch.build.targets.wheel]
 packages = ["kirk"]

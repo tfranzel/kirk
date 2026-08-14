@@ -197,7 +197,7 @@ class IrcClient:
         log_mode: Literal["file", "console", "none"] = "none",
     ):
         self.host = host
-        self.port = port or 6697 if ssl else 6667
+        self.port = port or (6697 if ssl else 6667)
         self.nick = nick
         self.server_aliases: list[str] = []
         self.mode: set[str] = set()
@@ -545,7 +545,7 @@ class IrcClient:
                     return
             case "NICK":
                 new_nick = message.params[0]
-                if message.prefix == self.nick:
+                if message.prefix_nick == self.nick:
                     self.nick = new_nick
                 # update users in channels
                 for channel in self.channels.values():
