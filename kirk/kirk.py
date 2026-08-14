@@ -18,6 +18,7 @@ from kirk.client import (
     IrcRawMessage,
 )
 from kirk.color import irc_to_ansi, name_to_rgb
+from kirk.help import HELP_TEXT
 from kirk.transporter import Transporter
 
 OPT_NUMBER_MAPPING = dict(zip("¡™£¢∞§¶•ªº", range(10), strict=False))
@@ -197,8 +198,7 @@ class Kirk:
         elif command == "save":
             Transporter.beam_down(self)
         elif command in ("help", "h"):
-            help_text = "TODO WRITE\nSOME HELP\nTEXT FOR THE COMMANDS"
-            for line in help_text.split("\n"):
+            for line in HELP_TEXT.split("\n"):
                 self.current_window.buf.insert(IrcRawMessage(prefix=None, command="HELP", params=[line]))
         elif command in ("q", "quit"):
             coro = self.client.quit()

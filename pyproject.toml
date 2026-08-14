@@ -1,6 +1,6 @@
 [project]
 name = "kirk"
-version = "0.1.0"
+version = "0.8.0"
 description = "Simple IRC client and curses UI"
 readme = "README.md"
 authors = [

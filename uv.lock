@@ -331,8 +331,8 @@ wheels = [
 
 [[package]]
 name = "kirk"
-version = "0.1.0"
-source = { virtual = "." }
+version = "0.8.0"
+source = { editable = "." }
 dependencies = [
     { name = "blessed" },
     { name = "cryptography" },
