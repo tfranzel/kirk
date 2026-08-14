@@ -17,7 +17,7 @@ from kirk.client import (
     IrcClient,
     IrcRawMessage,
 )
-from kirk.color import irc_to_ansi, name_to_rgb
+from kirk.color import highlight_mentions, irc_to_ansi, name_to_rgb
 from kirk.help import HELP_TEXT
 from kirk.transporter import Transporter
 
@@ -316,6 +316,7 @@ class Kirk:
         if msg.command == "PRIVMSG":
             _target, text = msg.params
             cmd = ""
+            text = highlight_mentions(text, self.client.nick, self.t)
             body = irc_to_ansi(text, self.t)
         elif msg.command == "NOTICE" or self.is_server_window:
             # 1. NOTICE can also be colorized, but still differentiate from PRIVMSG
@@ -326,6 +327,7 @@ class Kirk:
                 text = " ".join(msg.params)
 
             cmd = self.t.webgray(msg.command)
+            text = highlight_mentions(text, self.client.nick, self.t)
             body = irc_to_ansi(text, self.t)
         else:
             # tone down non-text message in regular chats

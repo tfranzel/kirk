@@ -64,6 +64,21 @@ MIRC_COLOR_MAPPING = {
 IRC_COLOR_RE = re.compile(r"\x03((?P<color_fg>\d{1,2})(,(?P<color_bg>\d{1,2}))?)?")
 IRC_FORMAT_RE = re.compile(r"(?P<format>[\x02\x1d\x1e\x1f])(?P<text>.*?)(?P=format)")
 
+# chars that count as part of a nick, used to keep mention matches on word boundaries
+NICK_CHAR = r"[A-Za-z0-9_\-\[\]\\`^{}|]"
+
+
+def highlight_mentions(text: str, nick: str, term: Terminal) -> str:
+    """Bold + colorize any mention of `nick` in text, using the nick's regular colorization."""
+    if not nick:
+        return text
+
+    colorizer = term.color_rgb(*name_to_rgb(nick))
+    mention_re = re.compile(
+        rf"(?<!{NICK_CHAR}){re.escape(nick)}(?!{NICK_CHAR})", re.IGNORECASE
+    )
+    return mention_re.sub(lambda m: term.bold(colorizer(m.group(0))), text)
+
 
 def irc_to_ansi(text: str, term: Terminal) -> str:
     """
