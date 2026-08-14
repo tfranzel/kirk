@@ -25,17 +25,17 @@ def test_irc_client_initialization():
 
     assert client.host == "irc.example.com"
     assert client.nick == "testnick"
-    assert client.port == 6667
-    assert not client.ssl
+    assert client.port == 6697
+    assert client.ssl
     assert client.auto_join == []
     assert client.keys == {}
     assert client.log_mode == "none"
 
 
-def test_irc_client_ssl_initialization():
-    client = IrcClient(host="irc.example.com", nick="testnick", ssl=True)
-    assert client.port == 6697
-    assert client.ssl
+def test_irc_client_no_ssl_initialization():
+    client = IrcClient(host="irc.example.com", nick="testnick", ssl=False)
+    assert client.port == 6667
+    assert not client.ssl
 
 
 def test_irc_client_custom_port():

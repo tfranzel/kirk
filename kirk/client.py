@@ -191,7 +191,7 @@ class IrcClient:
         auto_join: Sequence[str] | None = None,
         auth: str | None = None,
         port: int | None = None,
-        ssl: bool = False,
+        ssl: bool = True,
         keys: dict[str, str] | None = None,
         dcc_dir: str | None = None,
         log_mode: Literal["file", "console", "none"] = "none",
