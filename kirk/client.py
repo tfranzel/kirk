@@ -181,7 +181,7 @@ class IrcClient:
         - https://modern.ircdocs.horse/formatting
     """
 
-    version = "Kirk 0.1.0 (python)"
+    version = "Kirk 0.8.0 (python)"
     encryption_marker = "~"
 
     def __init__(
@@ -692,11 +692,15 @@ class IrcClient:
 
     def delay(self, coro: Coroutine[Any, Any, None], loop: asyncio.AbstractEventLoop) -> None:
         """External forking of tasks"""
-        self._futures.add(asyncio.run_coroutine_threadsafe(coro, loop))
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        self._futures.add(future)
+        future.add_done_callback(self._futures.discard)
 
     def _delay(self, coro: Coroutine[Any, Any, None]) -> None:
         """Internal forking of tasks"""
-        self._futures.add(asyncio.create_task(coro))
+        task = asyncio.create_task(coro)
+        self._futures.add(task)
+        task.add_done_callback(self._futures.discard)
 
     async def _connection_loop(self) -> None:
         """Listen for and handle incoming messages from the server."""
