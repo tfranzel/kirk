@@ -736,8 +736,6 @@ class IrcClient:
                 self.log(f"Connecting to {self.host}:{self.port} ...")
                 await self._connection_loop()
                 await asyncio.sleep(5)
-        except asyncio.CancelledError as e:
-            self.log(f"CancelledError: {e}\n{traceback.format_exc()}\n", "ERROR")
         except ServerTerminationError:
             self.log("Server terminated the connection", "TERM")
         except Exception as e:

@@ -139,10 +139,19 @@ async def _main(args: argparse.Namespace) -> None:
     kirk = Kirk(clients, loop)
 
     # blessed's notify_on_resize() relies on the terminal supporting in-band
-    # resize notifications (DEC mode 2048); tmux does not implement that, so
+    # resize notifications (DEC mode 2048); some do not implement that, so
     # fall back to SIGWINCH to still pick up resizes when running inside it.
     if not kirk.t.does_inband_resize():
         signal.signal(signal.SIGWINCH, lambda *_: setattr(kirk, "dirty", True))
+
+    # Ctrl-C should never kill the app outright (too easy to hit by accident);
+    # just nudge the user towards the real exit command instead of relying on
+    # the default SIGINT -> KeyboardInterrupt behavior.
+    def _deny_sigint_exit() -> None:
+        kirk.error_msg = "Kirk can be exited by typing '/exit'"
+        kirk.dirty = True
+
+    loop.add_signal_handler(signal.SIGINT, _deny_sigint_exit)
 
     if persistence:
         print("Beaming up crew ...")

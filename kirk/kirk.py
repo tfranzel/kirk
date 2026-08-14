@@ -529,13 +529,10 @@ class Kirk:
                     self.sync_client()
                     self.process_input(val)
                     self.render()
+                    # wait for next input
+                    val = self.t.inkey(timeout=0.33)
                 except ExitInterrupt:
-                    return
-                except KeyboardInterrupt:
-                    self.client.log("Keyboard interrupt")
                     return
                 except Exception as e:
                     self.client.log(f"something went terribly wrong: {e}")
                     self.client.log(traceback.format_exc())
-                # wait for next input
-                val = self.t.inkey(timeout=0.33)
