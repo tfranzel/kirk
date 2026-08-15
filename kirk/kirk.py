@@ -329,6 +329,9 @@ class Kirk:
             cmd = self.t.webgray(msg.command)
             text = highlight_mentions(text, self.client.nick, self.t)
             body = irc_to_ansi(text, self.t)
+        elif msg.command == "TAGMSG":
+            cmd = self.t.webgray(msg.command)
+            body = self.t.webgray(str(msg.tags))
         else:
             # tone down non-text message in regular chats
             cmd = self.t.webgray(msg.command)

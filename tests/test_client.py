@@ -174,6 +174,16 @@ def test_parse_message_multiple_params():
     assert msg.params == ["nick", "=", "#channel", "nick1 nick2 nick3"]
 
 
+def test_parse_message_with_tags():
+    raw = b"@aaa=bbb;ccc;example.com/ddd=eee :nick!ident@host.com PRIVMSG me :Hello\r\n"
+    msg = IrcClient.parse_raw_message(raw)
+
+    assert msg.prefix == "nick!ident@host.com"
+    assert msg.command == "PRIVMSG"
+    assert msg.params == ["me", "Hello"]
+    assert msg.tags == {"aaa": "bbb", "ccc": None, "example.com/ddd": "eee"}
+
+
 def test_parse_malformed_message():
     # a single word with no prefix/params is treated as the command
     msg = IrcClient.parse_raw_message(b"MALFORMED\r\n")
@@ -228,6 +238,18 @@ async def test_send_cmd_with_params_list():
     await client.send_cmd("MODE", ["#channel", "+o", "nick"])
 
     writer.write.assert_called_once_with(b"MODE #channel +o nick\r\n")
+
+
+@pytest.mark.asyncio
+async def test_send_cmd_with_tags():
+    client = IrcClient(host="irc.example.com", nick="testnick")
+    writer = mock_writer()
+    client._writer = writer
+
+    await client.send_cmd(
+        "PRIVMSG", "#channel", "Hello world", {"foo-foo": "a,b,c", "bar": None, "baz": "1"}
+    )
+    writer.write.assert_called_once_with(b"@foo-foo=a,b,c;bar;baz=1 PRIVMSG #channel :Hello world\r\n")
 
 
 @pytest.mark.asyncio

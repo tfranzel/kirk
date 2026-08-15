@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Callable
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -60,6 +60,7 @@ class IrcRawMessage:
     prefix: str | None
     command: str
     params: list[str]
+    tags: dict[str, str | None] | None = None
     secure: bool = False
     ts: datetime = field(default_factory=datetime.now)
 
@@ -183,6 +184,7 @@ class IrcClient:
 
     version = "Kirk 0.8.0 (python)"
     encryption_marker = "~"
+    cap_client = {"message-tags"}
 
     def __init__(
         self,
@@ -201,6 +203,8 @@ class IrcClient:
         self.port = port or (6697 if ssl else 6667)
         self.nick = nick
         self.server_aliases: list[str] = []
+        self.cap_server: dict[str, str | None] = {}
+        self.cap_enabled: set[str] = set()
         self.mode: set[str] = set()
         self.auto_join = auto_join or []
         self.auth = auth
@@ -257,9 +261,19 @@ class IrcClient:
             ssl=self.ssl,
         )
         self.mode.clear()
-        # introduce ourselves to the server
+        # request server capabilities and introduce ourselves
+        await self.send_cmd("CAP", "LS")
         await self.change_nick(self.nick)
-        await self.send_cmd("USER", [self.nick, "0", "*"], self.nick)
+        await self.user_introduction()
+        # we need server replies now - fork of next steps and go into main loop
+        self._delay(self._post_connect())
+
+    async def _post_connect(self) -> None:
+        await self.wait_for(lambda: bool(self.cap_server))
+        await self.send_cmd("CAP", "REQ", " ".join(set(self.cap_server) & self.cap_client))
+        await asyncio.sleep(1)
+        await self.send_cmd("CAP", "END")
+
         # fork off delayed post-connect tasks
         if self.password:
             self._delay(self.perform_auth())
@@ -270,7 +284,6 @@ class IrcClient:
         # wait for establishing boilerplate to end. mode from server is usually the end
         while not self.mode:
             await asyncio.sleep(1)
-
         await asyncio.sleep(1)
         await self.send_message("NickServ", f"IDENTIFY {self.nick} {self.password}")
 
@@ -287,18 +300,28 @@ class IrcClient:
         self._writer.write((raw + "\r\n").encode("utf-8"))
         await self._writer.drain()
 
-    async def send_cmd(self, command: str, params: str | list[str] = "", trailing: str = "") -> None:
+    async def send_cmd(
+        self,
+        command: str,
+        params: str | list[str] = "",
+        trailing: str = "",
+        tags: dict[str, str | None] | None = None,
+    ) -> None:
+        tags_str = f"@{';'.join(f'{k}={v}' if v else k for k, v in tags.items())} " if tags else ""
         if isinstance(params, list):
             params = " ".join(params)
         params = f" {params}" if params else ""
         trailing = f" :{trailing}" if trailing else ""
-        await self._send_raw(f"{command}{params}{trailing}")
+        await self._send_raw(f"{tags_str}{command}{params}{trailing}")
 
     async def join_channel(self, channel: str, password: str | None = None) -> None:
         await self.send_cmd("JOIN", channel)
 
     async def part_channel(self, channel: str, reason: str = "") -> None:
         await self.send_cmd("PART", channel, reason)
+
+    async def user_introduction(self, realname: str | None = None) -> None:
+        await self.send_cmd("USER", [self.nick, "0", "*"], realname or self.nick)
 
     async def change_nick(self, nick: str) -> None:
         await self.send_cmd("NICK", nick)
@@ -332,6 +355,9 @@ class IrcClient:
     async def send_notice(self, recipient: str, text: str) -> None:
         self.get_buf(recipient).insert(IrcRawMessage(self.nick, "NOTICE", [recipient, text]))
         await self.send_cmd("NOTICE", recipient, text)
+
+    async def send_tagmsg(self, target: str, tags: dict[str, str | None]) -> None:
+        await self.send_cmd("TAGMSG", target, tags=tags)
 
     async def send_ctcp_request(self, recipient: str, text: str) -> None:
         await self.send_message(recipient, f"\x01{text}\x01")
@@ -478,8 +504,12 @@ class IrcClient:
         """Parse an RFC2812-compliant message from the IRC server."""
         tmp = message.decode("utf-8", errors="ignore").strip()
         prefix = None
+        tags = None
         trailing: list[str] = []
 
+        if tmp.startswith("@"):
+            raw_tags, tmp = tmp[1:].split(" ", 1)
+            tags = cls.explode_dictstr(raw_tags, ";")
         if tmp.startswith(":"):
             prefix, tmp = tmp[1:].split(" ", 1)
         if " :" in tmp:
@@ -488,7 +518,7 @@ class IrcClient:
         args = tmp.split()
         command = args.pop(0) if args else ""
 
-        return IrcRawMessage(prefix=prefix, command=command, params=args + trailing)
+        return IrcRawMessage(prefix=prefix, command=command, params=args + trailing, tags=tags)
 
     @classmethod
     def process_mode_str(cls, mode_str: str) -> Iterator[tuple[bool, str]]:
@@ -498,6 +528,22 @@ class IrcClient:
                     yield True, mode
                 case "-":
                     yield False, mode
+
+    @classmethod
+    def explode_dictstr(cls, tagstr: str, div: str | None, sep: str = "=") -> dict[str, str | None]:
+        result = {}
+        for tag in tagstr.split(div):
+            key, _sep, val = tag.partition(sep)
+            result[key] = val if _sep else None
+        return result
+
+    @classmethod
+    async def wait_for(cls, condition: Callable[[], bool], timeout: int = 10) -> bool:
+        for _ in range(timeout):
+            if condition():
+                return True
+            await asyncio.sleep(1)
+        return False
 
     @classmethod
     def is_channel_name(cls, name: str) -> bool:
@@ -543,7 +589,20 @@ class IrcClient:
                     self.get_buf(chan).insert(message)
                 else:
                     self.log_error(f"MODE message unexpected {message.params}")
-                    return
+            case "TAGMSG":
+                target = message.params[0]
+                # self.get_buf(target).insert(message)  # TODO
+            case "CAP":
+                # Server without 302: CAP * LS :multi-prefix sasl
+                # Server    with 302: CAP * LS * :cap-notify server-time example.org/dummy-cap=dummyvalue
+                # Server    with 302: CAP * LS :userhost-in-names sasl=EXTERNAL,DH-AES,PLAIN
+                _, subcommand, *cap_params = message.params
+                match subcommand:
+                    case "LS":
+                        self.cap_server.update(self.explode_dictstr(cap_params[-1], None))
+                    case "ACK":
+                        self.cap_enabled.update(cap_params[-1].split())
+                self.server_buf.insert(message)
             case "NICK":
                 new_nick = message.params[0]
                 if message.prefix_nick == self.nick:

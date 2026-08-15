@@ -7,7 +7,7 @@ Another IRC client & UI, because [Irssi](https://github.com/irssi/irssi) is grea
 [jaraco/irc](https://github.com/jaraco/irc) is weirdly over-engineered while making seemingly simple things very hard. 
 
 This is a minimalistic, portable, yet almost complete
-[rfc2812](https://datatracker.ietf.org/doc/html/rfc2812#section-3.7.3)
+[rfc2812](https://datatracker.ietf.org/doc/html/rfc2812)
 implementation (~600 LOC client, ~400 LOC UI), which I should have written years ago, instead of
 fighting above tools.
 
@@ -23,7 +23,7 @@ fighting above tools.
 ## Client features
 
 * Fully `asyncio`
-* Implements most of [`rfc2812`](https://datatracker.ietf.org/doc/html/rfc2812#section-3.7.3)
+* Implements most of [`rfc2812`](https://datatracker.ietf.org/doc/html/rfc2812)
 * Symmetric E2E encryption with `cryptography.Fernet` (Kirk exclusive feature)
 * Auto-join
 * Auth support (via NickServ)
@@ -31,6 +31,9 @@ fighting above tools.
 * DCC support
 * SSL support
 * Super easy to extend and adapt!
+* Select IRCv3 support
+  * [`CAP`](https://ircv3.net/specs/extensions/capability-negotiation.html)
+  * [`message-tags`](https://ircv3.net/specs/extensions/message-tags)
 
 ## Demo
 
