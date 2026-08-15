@@ -35,8 +35,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--auth",
-        choices=["nickserv"],
-        help="Authentication method to use after connecting. (default: nickserv)",
+        choices=["nickserv", "sasl_plain"],
+        help="Authentication method to use after connecting. (default: sasl_plain)",
     )
     parser.add_argument(
         "--password",
@@ -105,7 +105,7 @@ async def _main(args: argparse.Namespace) -> None:
                 host=args.host,
                 nick=args.nick,
                 ssl=args.ssl,
-                auth=args.auth,
+                auth=args.auth or "sasl_plain",
                 password=args.password,
                 auto_join=args.join or [],
                 keys=args.key,
@@ -141,7 +141,7 @@ async def _main(args: argparse.Namespace) -> None:
             client_class(
                 host=c["host"],
                 nick=c["nick"],
-                auth=c.get("auth", None),
+                auth=c.get("auth", "sasl_plain"),
                 password=c.get("password", None),
                 auto_join=c.get("auto_join", None),
                 keys=c.get("keys", {}),

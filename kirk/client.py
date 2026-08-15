@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import contextlib
 import errno
 import ipaddress
@@ -9,13 +10,13 @@ import struct
 import traceback
 from asyncio import StreamReader, StreamWriter, Task
 from collections import defaultdict
-from collections.abc import Coroutine, Iterator, Sequence
+from collections.abc import Callable, Coroutine, Iterator, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
-from typing import Any, Literal, Callable
+from typing import Any, Literal
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -51,6 +52,15 @@ CHANNEL_PERM_MAPPING: dict[ChannelUserPerm, str] = {
 CHANNEL_PERM_MAPPING_REV: dict[str, ChannelUserPerm] = {
     v: k for k, v in CHANNEL_PERM_MAPPING.items() if k
 }
+
+
+@verify(UNIQUE)
+class Marker(StrEnum):
+    AUTHENTICATE_COMMENCED = "AUTHENTICATE+"
+    CAP_LS_DONE = "CAP-LS-DONE"
+    CAP_ACK_DONE = "CAP-ACK-DONE"
+    SASL_DONE = "SASL-DONE"
+    AUTHENTICATED = "AUTHENTICATED"
 
 
 @dataclass
@@ -182,16 +192,16 @@ class IrcClient:
         - https://modern.ircdocs.horse/formatting
     """
 
-    version = "Kirk 0.8.0 (python)"
+    version = "Kirk 0.8.1 (python)"
     encryption_marker = "~"
-    cap_client = {"message-tags"}
+    cap_client = {"message-tags", "sasl"}
 
     def __init__(
         self,
         host: str,
         nick: str,
         auto_join: Sequence[str] | None = None,
-        auth: Literal["nickserv"] = "nickserv",
+        auth: Literal["nickserv", "sasl_plain"] = "sasl_plain",
         password: str | None = None,
         port: int | None = None,
         ssl: bool = True,
@@ -220,6 +230,7 @@ class IrcClient:
         self._writer: StreamWriter = None  # type: ignore[assignment]
         self._futures = set[Future[Any] | Task[Any]]()
         self._attention: bool = False
+        self._marker: set[str] = set()
         if log_mode == "file":
             self._fh = open(f"kirk_{datetime.now().isoformat()}_{random.randint(100, 999)}.log", "w")  # noqa: SIM115
 
@@ -262,36 +273,48 @@ class IrcClient:
         )
         self.mode.clear()
         # request server capabilities and introduce ourselves
-        await self.send_cmd("CAP", "LS")
+        await self.send_cmd("CAP", ["LS", "302"])
         await self.change_nick(self.nick)
         await self.user_introduction()
         # we need server replies now - fork of next steps and go into main loop
         self._delay(self._post_connect())
 
     async def _post_connect(self) -> None:
-        await self.wait_for(lambda: bool(self.cap_server))
+        # wait for full list of capabilities and request what we and the server both support
+        await self.wait_for_marker(Marker.CAP_LS_DONE)
         await self.send_cmd("CAP", "REQ", " ".join(set(self.cap_server) & self.cap_client))
-        await asyncio.sleep(1)
+        await self.wait_for_marker(Marker.CAP_ACK_DONE)
+
+        if self.password and self.auth == "sasl_plain":
+            await self.perform_sasl_auth()
+
         await self.send_cmd("CAP", "END")
 
-        # fork off delayed post-connect tasks
-        if self.password:
-            self._delay(self.perform_auth())
-        if self.auto_join:
-            self._delay(self.perform_auto_join())
+        if self.password and self.auth == "nickserv":
+            await self.perform_nickserv_auth()
 
-    async def perform_auth(self) -> None:
+        if self.auto_join:
+            await self.perform_auto_join()
+
+    async def perform_sasl_auth(self) -> None:
+        await self.send_cmd("AUTHENTICATE", "PLAIN")
+        await self.wait_for_marker(Marker.AUTHENTICATE_COMMENCED)
+
+        payload = base64.b64encode(f"\0{self.nick}\0{self.password}".encode()).decode()
+        await self.send_cmd("AUTHENTICATE", payload)
+        await self.wait_for_marker(Marker.SASL_DONE)
+
+    async def perform_nickserv_auth(self) -> None:
         # wait for establishing boilerplate to end. mode from server is usually the end
-        while not self.mode:
-            await asyncio.sleep(1)
-        await asyncio.sleep(1)
+        await self.wait_for(lambda: self.mode)
         await self.send_message("NickServ", f"IDENTIFY {self.nick} {self.password}")
 
     async def perform_auto_join(self) -> None:
-        # if given, wait for auth to complete (r = registered)
-        while not self.mode or (self.password and "r" not in self.mode):
-            await asyncio.sleep(1)
-        await asyncio.sleep(1)
+        # wait to be onboarded and logged-in (if credentials given)
+        await self.wait_for(
+            lambda: self.mode and (not self.password or Marker.AUTHENTICATED in self._marker),
+            timeout=999,
+        )
         for channel in self.auto_join:
             await self.join_channel(channel)
 
@@ -334,6 +357,12 @@ class IrcClient:
 
     async def whois(self, nick: str) -> None:
         await self.send_cmd("WHOIS", nick)
+
+    async def whowas(self, nick: str) -> None:
+        await self.send_cmd("WHOWAS", nick)
+
+    async def who(self, nick: str) -> None:
+        await self.send_cmd("WHO", nick)
 
     async def send_message(self, recipient: str, text: str, encrypt: bool = False) -> None:
         if encrypt:
@@ -538,12 +567,18 @@ class IrcClient:
         return result
 
     @classmethod
-    async def wait_for(cls, condition: Callable[[], bool], timeout: int = 10) -> bool:
-        for _ in range(timeout):
+    async def wait_for(cls, condition: Callable[[], Any], timeout: int = 15) -> bool:
+        for _ in range(timeout * 10):
             if condition():
                 return True
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.1)
         return False
+
+    async def wait_for_marker(self, marker: Marker, clear: bool = True, timeout: int = 15) -> bool:
+        result = await self.wait_for(lambda: marker in self._marker, timeout=timeout)
+        if result and clear:
+            self._marker.discard(marker)
+        return result
 
     @classmethod
     def is_channel_name(cls, name: str) -> bool:
@@ -590,19 +625,24 @@ class IrcClient:
                 else:
                     self.log_error(f"MODE message unexpected {message.params}")
             case "TAGMSG":
-                target = message.params[0]
+                _target = message.params[0]
                 # self.get_buf(target).insert(message)  # TODO
             case "CAP":
-                # Server without 302: CAP * LS :multi-prefix sasl
-                # Server    with 302: CAP * LS * :cap-notify server-time example.org/dummy-cap=dummyvalue
-                # Server    with 302: CAP * LS :userhost-in-names sasl=EXTERNAL,DH-AES,PLAIN
+                # Server         with 302: CAP * LS * :cap-notify server-time example.org/dummy-cap=dummy
+                # Server with/without 302: CAP * LS :userhost-in-names sasl=EXTERNAL,DH-AES,PLAIN
                 _, subcommand, *cap_params = message.params
                 match subcommand:
                     case "LS":
                         self.cap_server.update(self.explode_dictstr(cap_params[-1], None))
+                        if cap_params[0] != "*":
+                            self._marker.add(Marker.CAP_LS_DONE)
                     case "ACK":
                         self.cap_enabled.update(cap_params[-1].split())
+                        self._marker.add(Marker.CAP_ACK_DONE)
                 self.server_buf.insert(message)
+            case "AUTHENTICATE":
+                if message.params and message.params[0] == "+":
+                    self._marker.add(Marker.AUTHENTICATE_COMMENCED)
             case "NICK":
                 new_nick = message.params[0]
                 if message.prefix_nick == self.nick:
@@ -704,7 +744,16 @@ class IrcClient:
                 # ERR_NOTONCHANNEL
                 self.get_buf(message.params[1]).insert(message)
             case "900":
-                # NO OFFICIAL CODE - Logged-in notification
+                # RPL_LOGGEDIN
+                self._marker.add(Marker.AUTHENTICATED)
+                self.server_buf.insert(message)
+            case "901":
+                # RPL_LOGGEDOUT
+                self._marker.discard(Marker.AUTHENTICATED)
+                self.server_buf.insert(message)
+            case "903" | "904" | "905":
+                # RPL_SASLSUCCESS | ERR_SASLFAIL | ERR_SASLTOOLONG
+                self._marker.add(Marker.SASL_DONE)
                 self.server_buf.insert(message)
             case "JOIN":
                 chan_name = message.params[0]

@@ -1,3 +1,5 @@
+import asyncio
+import base64
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -179,11 +181,48 @@ async def test_auth_flow_integration():
     writer = mock_writer()
     client._writer = writer
 
-    # perform_auth waits for client.mode to be non-empty before identifying
+    # perform_nickserv_auth waits for client.mode to be non-empty before identifying
     await client.process_message(IrcRawMessage("server.com", "MODE", ["testnick", "+r"]))
 
     with patch("asyncio.sleep", new_callable=AsyncMock):
-        await client.perform_auth()
+        await client.perform_nickserv_auth()
 
         calls = [call[0][0] for call in writer.write.call_args_list]
         assert any(b"IDENTIFY testnick password123" in call for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_sasl_plain_auth_flow_integration():
+    client = IrcClient(host="test.com", nick="testnick", auth="sasl_plain", password="password123")
+    writer = mock_writer()
+    client._writer = writer
+
+    # perform_auth polls with asyncio.sleep(1) between steps; patching "asyncio.sleep"
+    # patches the module attribute everywhere (kirk.client imports the module itself,
+    # not the function), so grab the real one first to avoid infinite self-recursion.
+    real_sleep = asyncio.sleep
+
+    async def instant_sleep(_seconds: float) -> None:
+        await real_sleep(0)
+
+    async def tick() -> None:
+        for _ in range(3):
+            await real_sleep(0)
+
+    with patch("kirk.client.asyncio.sleep", instant_sleep):
+        auth_task = asyncio.create_task(client.perform_sasl_auth())
+
+        await tick()
+        await client.process_message(IrcRawMessage(None, "CAP", ["testnick", "ACK", "sasl"]))
+        await tick()
+        await client.process_message(IrcRawMessage(None, "AUTHENTICATE", ["+"]))
+        await tick()
+        await client.process_message(
+            IrcRawMessage(None, "903", ["testnick", "SASL authentication successful"])
+        )
+        await asyncio.wait_for(auth_task, timeout=1)
+
+    calls = [call[0][0] for call in writer.write.call_args_list]
+    assert any(b"AUTHENTICATE PLAIN" in call for call in calls)
+    expected_payload = base64.b64encode(b"\0testnick\0password123").decode().encode()
+    assert any(expected_payload in call for call in calls)

@@ -8,7 +8,7 @@ Another IRC client & UI, because [Irssi](https://github.com/irssi/irssi) is grea
 
 This is a minimalistic, portable, yet almost complete
 [rfc2812](https://datatracker.ietf.org/doc/html/rfc2812)
-implementation (~600 LOC client, ~400 LOC UI), which I should have written years ago, instead of
+implementation (~900 LOC client, ~500 LOC UI), which I should have written years ago, instead of
 fighting above tools.
 
 ## UI features
@@ -23,10 +23,10 @@ fighting above tools.
 ## Client features
 
 * Fully `asyncio`
-* Implements most of [`rfc2812`](https://datatracker.ietf.org/doc/html/rfc2812)
-* Symmetric E2E encryption with `cryptography.Fernet` (Kirk exclusive feature)
+* Implements the majority of [rfc2812](https://datatracker.ietf.org/doc/html/rfc2812)
+* Symmetric E2E encryption with `cryptography.Fernet` **(Kirk exclusive feature)**
 * Auto-join
-* Auth support (via NickServ)
+* Auth support (NickServ or SASL)
 * CTCP support
 * DCC support
 * SSL support
@@ -34,6 +34,7 @@ fighting above tools.
 * Select IRCv3 support
   * [`CAP`](https://ircv3.net/specs/extensions/capability-negotiation.html)
   * [`message-tags`](https://ircv3.net/specs/extensions/message-tags)
+  * [SASL](https://ircv3.net/specs/extensions/sasl-3.1)
 
 ## Demo
 
