@@ -74,9 +74,7 @@ def highlight_mentions(text: str, nick: str, term: Terminal) -> str:
         return text
 
     colorizer = term.color_rgb(*name_to_rgb(nick))
-    mention_re = re.compile(
-        rf"(?<!{NICK_CHAR}){re.escape(nick)}(?!{NICK_CHAR})", re.IGNORECASE
-    )
+    mention_re = re.compile(rf"(?<!{NICK_CHAR}){re.escape(nick)}(?!{NICK_CHAR})", re.IGNORECASE)
     return mention_re.sub(lambda m: term.bold(colorizer(m.group(0))), text)
 
 

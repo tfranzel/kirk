@@ -35,7 +35,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--auth",
-        help="NickServ password to identify with after connecting.",
+        choices=["nickserv"],
+        help="Authentication method to use after connecting. (default: nickserv)",
+    )
+    parser.add_argument(
+        "--password",
+        help="Password to use with given auth method.",
     )
     parser.add_argument(
         "--key",
@@ -65,7 +70,17 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
 
     if args.config and any(
-        [args.host, args.nick, args.join, args.key, args.log, args.dcc_dir, args.auth, not args.ssl]
+        [
+            args.host,
+            args.nick,
+            args.join,
+            args.key,
+            args.log,
+            args.dcc_dir,
+            args.auth,
+            args.password,
+            not args.ssl,
+        ]
     ):
         parser.error("argument --config: not allowed with any other argument")
 
@@ -91,6 +106,7 @@ async def _main(args: argparse.Namespace) -> None:
                 nick=args.nick,
                 ssl=args.ssl,
                 auth=args.auth,
+                password=args.password,
                 auto_join=args.join or [],
                 keys=args.key,
                 dcc_dir=os.path.expanduser(args.dcc_dir) if args.dcc_dir else None,
@@ -126,6 +142,7 @@ async def _main(args: argparse.Namespace) -> None:
                 host=c["host"],
                 nick=c["nick"],
                 auth=c.get("auth", None),
+                password=c.get("password", None),
                 auto_join=c.get("auto_join", None),
                 keys=c.get("keys", {}),
                 dcc_dir=os.path.expanduser(c.get("dcc_dir", "~/Downloads/")),

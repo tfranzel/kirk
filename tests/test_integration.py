@@ -175,7 +175,7 @@ async def test_dcc_offer_parsing():
 
 @pytest.mark.asyncio
 async def test_auth_flow_integration():
-    client = IrcClient(host="test.com", nick="testnick", auth="password123")
+    client = IrcClient(host="test.com", nick="testnick", auth="nickserv", password="password123")
     writer = mock_writer()
     client._writer = writer
 

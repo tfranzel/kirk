@@ -189,7 +189,8 @@ class IrcClient:
         host: str,
         nick: str,
         auto_join: Sequence[str] | None = None,
-        auth: str | None = None,
+        auth: Literal["nickserv"] = "nickserv",
+        password: str | None = None,
         port: int | None = None,
         ssl: bool = True,
         keys: dict[str, str] | None = None,
@@ -203,6 +204,7 @@ class IrcClient:
         self.mode: set[str] = set()
         self.auto_join = auto_join or []
         self.auth = auth
+        self.password = password
         self.ssl = ssl
         self.dcc_dir = dcc_dir
         self.keys = keys or {}
@@ -259,7 +261,7 @@ class IrcClient:
         await self.change_nick(self.nick)
         await self.send_cmd("USER", [self.nick, "0", "*"], self.nick)
         # fork off delayed post-connect tasks
-        if self.auth:
+        if self.password:
             self._delay(self.perform_auth())
         if self.auto_join:
             self._delay(self.perform_auto_join())
@@ -270,14 +272,13 @@ class IrcClient:
             await asyncio.sleep(1)
 
         await asyncio.sleep(1)
-        await self.send_message("NickServ", f"IDENTIFY {self.nick} {self.auth}")
+        await self.send_message("NickServ", f"IDENTIFY {self.nick} {self.password}")
 
     async def perform_auto_join(self) -> None:
         # if given, wait for auth to complete (r = registered)
-        while not self.mode or (self.auth and "r" not in self.mode):
+        while not self.mode or (self.password and "r" not in self.mode):
             await asyncio.sleep(1)
-
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
         for channel in self.auto_join:
             await self.join_channel(channel)
 

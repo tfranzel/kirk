@@ -71,8 +71,9 @@ auto_join = [
     "#testchannel",
 ]
 ssl = true
-# Optional: AuthServe authentication
-auth = "YOURPASSWORD"
+# Optional: authenticate after connecting. auth is "nickserv"
+auth = "nickserv"
+password = "YOURPASSWORD"
 # Symmentric encrpytion with peer. Both need the same key
 # Key generation: base64.urlsafe_b64encode(os.urandom(32))
 keys.CpnKirk25 = "R3k4JBrPet51XYzkD64KNeuOljzANxBT6yIHZT-yY7w="
