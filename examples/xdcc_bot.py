@@ -1,7 +1,5 @@
 import asyncio
-import ipaddress
 import logging
-import random
 import re
 from pathlib import Path
 from typing import Any
@@ -25,18 +23,13 @@ class XdccBot(IrcClient):
         dcc_announce_channel: str,
         dcc_serve_path: Path,
         dcc_host_ip: str,
-        dcc_port_min: int = 10_000,
-        dcc_port_max: int = 11_000,
         **kwargs: Any,
     ) -> None:
         self.dcc_announce_channel = dcc_announce_channel
         self.dcc_serve_path = dcc_serve_path
-        self.dcc_host_ip = dcc_host_ip
-        self.dcc_port_min = dcc_port_min
-        self.dcc_port_max = dcc_port_max
         kwargs.setdefault("auto_join", [dcc_announce_channel])
         kwargs.setdefault("log_mode", "console")
-        super().__init__(host=host, nick=nick, **kwargs)
+        super().__init__(host=host, nick=nick, dcc_host_ip=dcc_host_ip, **kwargs)
 
     def build_offering_map(self) -> None:
         """Rebuild the announced file map from serve_dir, replacing any previous scan."""
@@ -79,38 +72,9 @@ class XdccBot(IrcClient):
         if offering:
             size, file = offering
             self.log(f"Resolved {match['idx']} to {file.name} ({self.format_size(size)}), sending ...")  # type: ignore[index]
-            await self.process_file_transfer_request(requester=requester, file=file)
+            await self.dcc_send(requester, file)
         else:
             await self.send_message(requester, "Invalid request")
-
-    async def process_file_transfer_request(self, requester: str, file: Path) -> None:
-        async def handle_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-            self.log(f"Commencing transfer of {file} to {requester}.")
-            # stop accepting further connections immediately, before serving this one
-            server.close()
-            try:
-                with open(file, "rb") as fh:
-                    await asyncio.get_event_loop().sendfile(writer.transport, fh)
-            finally:
-                # always close, even on a failed transfer, so wait_closed() doesn't hang forever
-                writer.close()
-                await writer.wait_closed()
-
-        host = int(ipaddress.ip_address(self.dcc_host_ip))
-        port = random.randint(self.dcc_port_min, self.dcc_port_max)
-
-        # backlog=1 so the OS refuses any further connection attempts at the TCP
-        # level while our single accepted connection is being served
-        self.log(f"Opening port {port} for {requester}.")
-        server = await asyncio.start_server(handle_request, "0.0.0.0", port, backlog=1)
-
-        await self.send_ctcp_request(
-            requester, f"DCC SEND {file.name} {host} {port} {file.stat().st_size}"
-        )
-
-        async with server:
-            await server.wait_closed()
-        self.log(f"Finished serving {file} to {requester}.")
 
     @classmethod
     def format_size(cls, size: int) -> str:

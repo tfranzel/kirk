@@ -48,7 +48,9 @@ class Transporter:
                 for name, msgs in client_data["channels"].items():
                     cls._deserialize(client.channels[name].buf, msgs)
         except (KeyError, TypeError, ValueError) as e:
-            kirk.error_msg = f"~/.kirk_state.json is incompatible with this version of Kirk, skipping restore: {e}"
+            kirk.error_msg = (
+                f"~/.kirk_state.json is incompatible with this version of Kirk, skipping restore: {e}"
+            )
 
     @classmethod
     def _deserialize(cls, buf: Buffer[IrcRawMessage], msgs: list[dict[str, Any]]) -> None:

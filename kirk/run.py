@@ -57,6 +57,10 @@ def parse_args() -> argparse.Namespace:
         help="Directory to save incoming DCC file transfers to.",
     )
     parser.add_argument(
+        "--dcc-host-ip",
+        help="Externally reachable IP to advertise when offering files via '/dcc send'.",
+    )
+    parser.add_argument(
         "--log",
         action="store_true",
         help="Log session activity to file instead of discarding it.",
@@ -82,6 +86,7 @@ def parse_args() -> argparse.Namespace:
             args.key,
             args.log,
             args.dcc_dir,
+            args.dcc_host_ip,
             args.auth,
             args.password,
             args.persistence,
@@ -115,6 +120,7 @@ async def _main(args: argparse.Namespace) -> None:
                 auto_join=args.join or [],
                 keys=args.key,
                 dcc_dir=os.path.expanduser(args.dcc_dir) if args.dcc_dir else None,
+                dcc_host_ip=args.dcc_host_ip,
                 log_mode="file" if args.log else "none",
             )
         ]
@@ -151,6 +157,7 @@ async def _main(args: argparse.Namespace) -> None:
                 auto_join=c.get("auto_join", None),
                 keys=c.get("keys", {}),
                 dcc_dir=os.path.expanduser(c.get("dcc_dir", "~/Downloads/")),
+                dcc_host_ip=c.get("dcc_host_ip", None),
                 ssl=c.get("ssl", True),
                 log_mode=c.get("log_mode", "none"),
             )

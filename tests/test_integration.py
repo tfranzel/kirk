@@ -1,5 +1,7 @@
 import asyncio
 import base64
+import ipaddress
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -173,6 +175,68 @@ async def test_dcc_offer_parsing():
         assert dcc.size == 1000
         mock_delay.assert_called_once()
         mock_delay.call_args[0][0].close()  # avoid "coroutine was never awaited" from the mock
+
+
+class _FakeServer:
+    """Stand-in for asyncio.Server: supports `async with` without opening a real socket."""
+
+    def __init__(self) -> None:
+        self.close = Mock()
+
+    async def __aenter__(self) -> "_FakeServer":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_dcc_send_offers_file(tmp_path: Path) -> None:
+    file = tmp_path / "payload.bin"
+    file.write_bytes(b"x" * 42)
+
+    client = IrcClient(host="test.com", nick="testnick", dcc_host_ip="203.0.113.1")
+    writer = mock_writer()
+    client._writer = writer
+
+    with patch("asyncio.start_server", AsyncMock(return_value=_FakeServer())) as mock_start_server:
+        await client.dcc_send("receiver", file)
+
+    mock_start_server.assert_called_once()
+    _, host, port = mock_start_server.call_args[0]
+    assert host == "0.0.0.0"
+    assert mock_start_server.call_args.kwargs["backlog"] == 1
+
+    call_args = writer.write.call_args[0][0]
+    expected_host = int(ipaddress.ip_address("203.0.113.1"))
+    assert f"DCC SEND payload.bin {expected_host} {port} 42".encode() in call_args
+
+
+@pytest.mark.asyncio
+async def test_dcc_send_requires_host_ip(tmp_path: Path) -> None:
+    file = tmp_path / "payload.bin"
+    file.write_bytes(b"x")
+
+    client = IrcClient(host="test.com", nick="testnick")
+    client.dcc_host_ip = ""  # force the "not configured" branch; the constructor defaults it
+
+    with patch("asyncio.start_server") as mock_start_server:
+        await client.dcc_send("receiver", file)
+
+    mock_start_server.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dcc_send_missing_file(tmp_path: Path) -> None:
+    client = IrcClient(host="test.com", nick="testnick", dcc_host_ip="203.0.113.1")
+
+    with patch("asyncio.start_server") as mock_start_server:
+        await client.dcc_send("receiver", tmp_path / "does-not-exist.bin")
+
+    mock_start_server.assert_not_called()
 
 
 @pytest.mark.asyncio

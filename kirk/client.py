@@ -211,6 +211,8 @@ class IrcClient:
         ssl: bool = True,
         keys: dict[str, str] | None = None,
         dcc_dir: str | None = None,
+        dcc_host_ip: str | None = None,
+        dcc_port_range: tuple[int, int] = (10_000, 11_000),
         log_mode: Literal["file", "console", "none"] = "none",
     ):
         self.host = host
@@ -225,6 +227,8 @@ class IrcClient:
         self.password = password
         self.ssl = ssl
         self.dcc_dir = dcc_dir
+        self.dcc_host_ip = dcc_host_ip or "127.0.0.1"
+        self.dcc_port_range = dcc_port_range
         self.keys = keys or {}
         self.channels = ChannelDict()
         self.chats = defaultdict[str, Buffer[IrcRawMessage]](Buffer)
@@ -525,9 +529,49 @@ class IrcClient:
         dcc.end_time = datetime.now()
         await asyncio.sleep(5)  # give peer some time to wrap-up
         writer.close()
-        await writer.wait_closed()
-        self.log("Connection closed. File written successfully.", "DCC", dcc.source)
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+        self.log("Connection closed. File written successfully", "DCC", dcc.source)
         await self.dcc_complete_callback(dcc)
+
+    async def dcc_send(self, recipient: str, file: Path) -> None:
+        """Offer `file` to `recipient` over DCC and serve it once they accept."""
+
+        async def handle_request(reader: StreamReader, writer: StreamWriter) -> None:
+            self.log(f'Connection established. Sending "{file.name}"', "DCC", recipient)
+            # stop accepting further connections immediately, before serving this one
+            server.close()
+            try:
+                with open(file, "rb") as fh:
+                    await asyncio.get_event_loop().sendfile(writer.transport, fh)
+            finally:
+                # always close, even on a failed transfer, so wait_closed() doesn't hang forever
+                writer.close()
+                await writer.wait_closed()
+
+        if not self.dcc_host_ip:
+            self.log_error("dcc_host_ip not set. Cannot offer DCC SEND.", "DCC", recipient)
+            return
+        if not file.is_file():
+            self.log_error(f"No such file: {file}", "DCC", recipient)
+            return
+
+        host = int(ipaddress.ip_address(self.dcc_host_ip))
+        port = random.randint(*self.dcc_port_range)
+
+        # backlog=1 so the OS refuses any further connection attempts at the TCP
+        # level while our single accepted connection is being served
+        self.log(f"Starting server on port {port}", "DCC", recipient)
+        server = await asyncio.start_server(handle_request, "0.0.0.0", port, backlog=1)
+
+        # advertise the offering with connection details to recipient
+        await self.send_ctcp_request(
+            recipient, f"DCC SEND {file.name} {host} {port} {file.stat().st_size}"
+        )
+        async with server:
+            await server.wait_closed()
+
+        self.log("Connection closed", "DCC", recipient)
 
     @classmethod
     def parse_raw_message(cls, message: bytes) -> IrcRawMessage:
