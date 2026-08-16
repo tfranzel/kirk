@@ -62,6 +62,11 @@ def parse_args() -> argparse.Namespace:
         help="Log session activity to file instead of discarding it.",
     )
     parser.add_argument(
+        "--persistence",
+        action="store_true",
+        help="Save buffer history on exit and load it again on start.",
+    )
+    parser.add_argument(
         "--config",
         default=None,
         help="Path to the TOML config file (default: ~/.kirk.toml). "
@@ -79,6 +84,7 @@ def parse_args() -> argparse.Namespace:
             args.dcc_dir,
             args.auth,
             args.password,
+            args.persistence,
             not args.ssl,
         ]
     ):
@@ -97,9 +103,8 @@ def parse_args() -> argparse.Namespace:
 
 async def _main(args: argparse.Namespace) -> None:
     """Initialize and run Kirk IRC client from CLI arguments or a configuration file."""
-    persistence = False
-
     if args.host and args.nick:
+        persistence = args.persistence
         clients = [
             IrcClient(
                 host=args.host,
@@ -135,7 +140,7 @@ async def _main(args: argparse.Namespace) -> None:
         else:
             client_class = IrcClient
 
-        persistence = False  # config["kirk"].get("persistence", False)
+        persistence = config["kirk"].get("persistence", False)
 
         clients = [
             client_class(
