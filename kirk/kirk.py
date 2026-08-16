@@ -16,6 +16,7 @@ from kirk.client import (
     ChannelUserPerm,
     IrcClient,
     IrcRawMessage,
+    is_ctcp,
 )
 from kirk.color import highlight_mentions, irc_to_ansi, name_to_rgb
 from kirk.help import HELP_TEXT
@@ -199,7 +200,7 @@ class Kirk:
             Transporter.beam_down(self)
         elif command in ("help", "h"):
             for line in HELP_TEXT.split("\n"):
-                self.current_window.buf.insert(IrcRawMessage(prefix=None, command="HELP", params=[line]))
+                self.client.log(line, "HELP", self.current_window_name)
         elif command in ("q", "quit"):
             coro = self.client.quit()
         elif command in ("l", "list"):
@@ -313,28 +314,26 @@ class Kirk:
         colorized_nick = self.t.ljust(colorizer(f"<{msg.prefix_nick}>"), nick_offset + 2)
         divider = self.t.tomato("S") if msg.secure else self.t.webgray("|")
 
-        if msg.command == "PRIVMSG":
+        cmd = "" if msg.command == "PRIVMSG" else self.t.webgray(msg.command)
+
+        if msg.command in ("PRIVMSG", "NOTICE"):
             _target, text = msg.params
-            cmd = ""
+
+            text = self.t.gold2(text[1:-1]) if is_ctcp(text) else text
             text = highlight_mentions(text, self.client.nick, self.t)
             body = irc_to_ansi(text, self.t)
-        elif msg.command == "NOTICE" or self.is_server_window:
-            # 1. NOTICE can also be colorized, but still differentiate from PRIVMSG
-            # 2. don't mute server window text
+        elif self.is_server_window:
             if msg.params and msg.params[0] in (self.client.nick, "*"):
                 text = " ".join(msg.params[1:])
             else:
                 text = " ".join(msg.params)
 
-            cmd = self.t.webgray(msg.command)
             text = highlight_mentions(text, self.client.nick, self.t)
             body = irc_to_ansi(text, self.t)
         elif msg.command == "TAGMSG":
-            cmd = self.t.webgray(msg.command)
             body = self.t.webgray(str(msg.tags))
         else:
             # tone down non-text message in regular chats
-            cmd = self.t.webgray(msg.command)
             body = self.t.webgray(" ".join(msg.params))
 
         return self._split_message(

@@ -183,6 +183,10 @@ class DCC:
         return f'DCC for "{self.filename}" from "{self.source}" ({self.ip}:{self.port})'
 
 
+def is_ctcp(text: str) -> bool:
+    return text.startswith("\x01") and text.endswith("\x01")
+
+
 class IrcClient:
     """
     Basic IRC Client based on
@@ -319,7 +323,7 @@ class IrcClient:
             await self.join_channel(channel)
 
     async def _send_raw(self, raw: str) -> None:
-        self.log(raw, "OUT")
+        self.log(raw, "OUT", show=False)
         self._writer.write((raw + "\r\n").encode("utf-8"))
         await self._writer.drain()
 
@@ -399,7 +403,8 @@ class IrcClient:
         target = message.params[0]
         text = message.params[1].strip("\x01")
 
-        self.log(f'Received command "{text}" from {source}', "CTCP")
+        if not text.startswith("ACTION"):
+            self.get_buf(source).insert(message)
 
         if text == "VERSION":
             await self.send_ctcp_reply(source, f"VERSION {self.version}")
@@ -424,12 +429,12 @@ class IrcClient:
                     ssl=send_type == "SSEND",
                 )
             except ValueError:
-                self.log_error("Malformed CTCP DCC command", "CTCP")
+                self.log_error("Malformed CTCP DCC command", "CTCP", source)
                 return
             self.dcc.append(dcc)
             self._delay(self.dcc_download(dcc))
         else:
-            self.log_error("Unknown CTCP command", "CTCP")
+            self.log_error("Unknown CTCP command", "CTCP", source)
 
     async def process_privmsg(self, message: IrcRawMessage) -> None:
         """Process any kind of PRIVMSG. Unwrap potential encryption transparently."""
@@ -439,7 +444,7 @@ class IrcClient:
 
         target, text = message.params
 
-        if text.startswith("\x01") and text.endswith("\x01"):
+        if is_ctcp(text):
             await self.process_privmsg_ctcp(message)
         elif self.nick == target:
             await self.process_user_message(message)
@@ -467,29 +472,25 @@ class IrcClient:
             cipher = text[len(self.encryption_marker) :]
             message.params[1] = Fernet(key=self.keys[source]).decrypt(cipher, ttl=5).decode()
             message.secure = True
-            self.log(message)  # also log decrypted version of message
         except (InvalidToken, KeyError):
-            self.log("failed decrypting message", "SEC")
-            self.get_buf(source).insert(IrcRawMessage(source, "SEC", ["failed decrypting message"]))
+            self.log_error("failed decrypting message", "SEC", source)
 
     def dcc_status_callback(self, dcc: DCC) -> None:
         msg = (
-            f'Receiving "{dcc.filename}" from {dcc.source}: {dcc.bytes_received / 2**20:.0f} MB - '
+            f'Receiving "{dcc.filename}" - {dcc.bytes_received / 2**20:.0f} MB - '
             f"{dcc.bytes_received / dcc.size * 100:.1f} % - "
             f"{dcc.bytes_received / (datetime.now() - dcc.start_time).total_seconds() / 2**20:.2f} MB/s"
         )
-        self.log(msg, "DCC")
-        self.get_buf(dcc.source).insert(IrcRawMessage(dcc.source, "DCC", [msg]))
+        self.log(msg, "DCC", dcc.source)
 
     async def dcc_complete_callback(self, dcc: DCC) -> None:
         pass
 
     async def dcc_download(self, dcc: DCC) -> None:
         if not self.dcc_dir:
-            self.log_error("DCC directory not set. Doing nothing.", "DCC")
+            self.log_error("DCC directory not set. Doing nothing.", "DCC", dcc.source)
             return
 
-        self.log(f"Opening connection for {dcc} (size: {dcc.size}) ...", "DCC")
         if dcc.ssl:
             ssl_ctx = ssl.SSLContext()
             ssl_ctx.set_ciphers("DEFAULT:@SECLEVEL=1")  # be lenient, this is not banking.
@@ -499,9 +500,9 @@ class IrcClient:
             reader, writer = await asyncio.open_connection(
                 host=dcc.ip, port=dcc.port, limit=2**24, ssl=ssl_ctx
             )
-            self.log("Connection established", "DCC")
+            self.log(f"Connection established to {dcc.ip}:{dcc.port}", "DCC", dcc.source)
         except Exception as e:
-            self.log(f"Failed opening connection: {e}\n{traceback.format_exc()}\n", "DCC")
+            self.log(f"Failed opening connection: {e}\n{traceback.format_exc()}\n", "DCC", dcc.source)
             return
 
         last_status = datetime.now()
@@ -525,7 +526,7 @@ class IrcClient:
         await asyncio.sleep(5)  # give peer some time to wrap-up
         writer.close()
         await writer.wait_closed()
-        self.log(f"Closed connection for {dcc}", "DCC")
+        self.log("Connection closed. File written successfully.", "DCC", dcc.source)
         await self.dcc_complete_callback(dcc)
 
     @classmethod
@@ -599,17 +600,20 @@ class IrcClient:
                 await self.process_privmsg(message)
             case "MODE":
                 if len(message.params) == 2:
-                    # personal user mode
-                    user, mode_str = message.params
+                    # personal user mode or channel mode
+                    user_or_channel, mode_str = message.params
                     for add, mode in self.process_mode_str(mode_str):
                         if add:
                             self.mode.add(mode)
                         else:
                             self.mode.discard(mode)
 
-                    self.server_buf.insert(message)
+                    if self.nick == user_or_channel:
+                        self.server_buf.insert(message)
+                    else:
+                        self.channels[user_or_channel].buf.insert(message)
                 elif len(message.params) == 3:
-                    # mode for user in channel
+                    # user channel mode
                     chan, mode_str, user = message.params
                     for add, mode in self.process_mode_str(mode_str):
                         if mode == "b":
@@ -662,7 +666,12 @@ class IrcClient:
                     self.server_aliases.append(message.prefix_nick)
 
                 # Centralize special service notices
-                if not message.prefix or message.prefix_nick in ("NickServ", "HostServ", "ChanServ"):
+                if not message.prefix or message.prefix_nick in (
+                    "NickServ",
+                    "HostServ",
+                    "ChanServ",
+                    "SaslServ",
+                ):
                     self.server_buf.insert(message)
                 else:
                     self.get_buf(message.prefix_nick).insert(message)
@@ -778,20 +787,31 @@ class IrcClient:
                 self.log_error(message, "Unknown command")
                 self.server_buf.insert(message)
 
-    def log_error(self, message: IrcRawMessage | str, category: str | None = None) -> None:
-        self.log(message, category, level=logging.ERROR)
+    def log_error(
+        self,
+        message: IrcRawMessage | str,
+        category: str | None = None,
+        source: str | None = None,
+    ) -> None:
+        self.log(message, category, source=source, level=logging.ERROR)
 
     def log(
         self,
         message: IrcRawMessage | str,
         category: str | None = None,
+        source: str | None = None,
+        show: bool = True,
         level: int = logging.INFO,
     ) -> None:
-        msg = (
-            f"{message.ts if isinstance(message, IrcRawMessage) else datetime.now()}:{self.host}"
-            f":{category or (message.command if isinstance(message, IrcRawMessage) else 'N/A')}"
-            f":{message}"
-        )
+        if isinstance(message, IrcRawMessage):
+            msg = f"{message.ts}:{self.host}:{category or message.command}:{message}"
+            if show:
+                self.get_buf(message.prefix_nick).insert(message)
+        else:
+            msg = f"{datetime.now()}:{self.host}:{category or '-'}:{message}"
+            if show:
+                self.get_buf(source or self.host).insert(IrcRawMessage(None, category or "-", [message]))
+
         match self.log_mode:
             case "file":
                 self._fh.write(msg + "\n")
@@ -827,7 +847,7 @@ class IrcClient:
                     await self.send_cmd("TIME")
                     continue
                 message = self.parse_raw_message(response)
-                self.log(message, "IN")
+                self.log(message, "IN", show=False)
                 await self.process_message(message)
         except ConnectionResetError:
             self.log_error("Connection reset. Reconnecting ...")
