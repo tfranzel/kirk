@@ -20,6 +20,8 @@ from typing import Any, Literal
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from kirk import ASCII_LOGO
+
 logger = logging.getLogger("IrcClient")
 
 
@@ -239,6 +241,8 @@ class IrcClient:
         self._marker: set[str] = set()
         if log_mode == "file":
             self._fh = open(f"kirk_{datetime.now().isoformat()}_{random.randint(100, 999)}.log", "w")  # noqa: SIM115
+        for ll in ASCII_LOGO.split("\n"):
+            self.log(ll)
 
     @property
     def server_buf(self) -> Buffer[IrcRawMessage]:
