@@ -230,6 +230,8 @@ class Kirk:
         elif command == "ctcp" and len(args) > 1:
             recipient, text = args[0], " ".join(args[1:])
             coro = self.client.send_ctcp_request(recipient=recipient, text=text)
+        elif command == "handshake" and len(args) == 1:
+            coro = self.client.start_key_exchange(args[0])
         elif command == "members":
             if self.client.is_channel_name(self.current_window_name):
                 channel = self.client.channels[self.current_window_name]

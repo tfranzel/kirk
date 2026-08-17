@@ -19,8 +19,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from cryptography.fernet import Fernet, InvalidToken
+from tomlkit.exceptions import TOMLKitError
 
-from kirk import ASCII_LOGO
+from kirk import ASCII_LOGO, config
+from kirk.security import KeyExchange
 
 logger = logging.getLogger("IrcClient")
 
@@ -179,9 +181,6 @@ class DCC:
     def complete(self) -> bool:
         return self.size == self.bytes_received
 
-    def __str__(self) -> str:
-        return f'DCC for "{self.filename}" from "{self.source}" ({self.ip}:{self.port})'
-
 
 def is_ctcp(text: str) -> bool:
     return text.startswith("\x01") and text.endswith("\x01")
@@ -214,6 +213,7 @@ class IrcClient:
         dcc_host_ip: str | None = None,
         dcc_port_range: tuple[int, int] = (10_000, 11_000),
         log_mode: Literal["file", "console", "none"] = "none",
+        config_path: str | None = None,
     ):
         self.host = host
         self.port = port or (6697 if ssl else 6667)
@@ -229,16 +229,18 @@ class IrcClient:
         self.dcc_dir = dcc_dir
         self.dcc_host_ip = dcc_host_ip or "127.0.0.1"
         self.dcc_port_range = dcc_port_range
-        self.keys = keys or {}
+        self.keys: dict[str, str] = keys or {}
         self.channels = ChannelDict()
         self.chats = defaultdict[str, Buffer[IrcRawMessage]](Buffer)
         self.dcc: list[DCC] = []
         self.log_mode = log_mode
+        self.config_path = config_path
         self._reader: StreamReader = None  # type: ignore[assignment]
         self._writer: StreamWriter = None  # type: ignore[assignment]
         self._futures = set[Future[Any] | Task[Any]]()
         self._attention: bool = False
         self._marker: set[str] = set()
+        self._dh_pending: dict[str, KeyExchange] = {}
         if log_mode == "file":
             self._fh = open(f"kirk_{datetime.now().isoformat()}_{random.randint(100, 999)}.log", "w")  # noqa: SIM115
         for ll in ASCII_LOGO.split("\n"):
@@ -400,6 +402,59 @@ class IrcClient:
     async def send_ctcp_reply(self, recipient: str, text: str) -> None:
         await self.send_notice(recipient, f"\x01{text}\x01")
 
+    async def start_key_exchange(self, recipient: str) -> None:
+        """Kick off a DH handshake to establish a shared encryption key with `recipient`."""
+        if recipient in self._dh_pending or not self._dh_handshake_allowed(recipient):
+            return
+        self._dh_pending[recipient] = dh = KeyExchange()
+        await self.send_ctcp_request(recipient, f"DH1 {dh.public_key} {dh.salt}")
+
+    async def process_ctcp_dh1(self, source: str, text: str) -> None:
+        self.log(f"Incoming secure channel handshake request from {source}", "SEC", source)
+        if not self._dh_handshake_allowed(source, tampering=True):
+            return
+        try:
+            _, peer_public_key, salt = text.split()
+            dh = KeyExchange(peer_public_key, salt)
+        except ValueError:
+            self.log_error("Malformed DH handshake request", "SEC", source)
+        else:
+            await self.send_ctcp_request(source, f"DH2 {dh.public_key}")
+            self._complete_secure_channel(source, dh)
+
+    async def process_ctcp_dh2(self, source: str, text: str) -> None:
+        dh = self._dh_pending.pop(source, None)
+        if not dh:
+            self.log_error("Unexpected DH handshake reply", "SEC", source)
+            return
+        if not self._dh_handshake_allowed(source, tampering=True):
+            return
+        self.log(f"Received handshake reply from {source}, finalizing secure channel", "SEC", source)
+        try:
+            _, peer_public_key = text.split()
+            dh.set_peer_public_key(peer_public_key)
+        except ValueError:
+            self.log_error("Malformed DH handshake reply", "SEC", source)
+        else:
+            self._complete_secure_channel(source, dh)
+
+    def _dh_handshake_allowed(self, source: str, tampering: bool = False) -> bool:
+        if source not in self.keys:
+            return True
+        note = " (possible tampering)" if tampering else ""
+        self.log_error(f"Refusing DH handshake with {source}: a key already exists{note}", "SEC", source)
+        return False
+
+    def _complete_secure_channel(self, source: str, dh: KeyExchange) -> None:
+        self.log(f"Secure channel established. Verify fingerprint: {dh.fingerprint}", "SEC", source)
+        self.keys[source] = dh.shared_key
+
+        if self.config_path:
+            try:
+                config.persist_key(self.config_path, self.host, source, dh.shared_key)
+            except (OSError, TOMLKitError, KeyError) as e:
+                self.log_error(f"Could not persist key to {self.config_path}: {e}", "SEC")
+
     async def process_privmsg_ctcp(self, message: IrcRawMessage) -> None:
         source = message.prefix_nick
         target = message.params[0]
@@ -418,6 +473,10 @@ class IrcClient:
             await self.send_ctcp_reply(source, f"USERINFO {self.nick}")
         elif text.startswith("ACTION"):
             self.get_buf(target).insert(IrcRawMessage(message.prefix, "ACTION", [target, text]))
+        elif text.startswith("DH1"):
+            await self.process_ctcp_dh1(source, text)  # kirk encryption feature
+        elif text.startswith("DH2"):
+            await self.process_ctcp_dh2(source, text)  # kirk encryption feature
         elif text.startswith("DCC"):
             try:
                 _, send_type, filename, ip, port, size, *args = text.split()
@@ -432,9 +491,9 @@ class IrcClient:
                 )
             except ValueError:
                 self.log_error("Malformed CTCP DCC command", "CTCP", source)
-                return
-            self.dcc.append(dcc)
-            self._delay(self.dcc_download(dcc))
+            else:
+                self.dcc.append(dcc)
+                self._delay(self.dcc_download(dcc))
         else:
             self.log_error("Unknown CTCP command", "CTCP", source)
 

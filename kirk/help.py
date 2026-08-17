@@ -12,6 +12,7 @@ Kirk commands:
     /msg, /m <nick> <text> send a private message
     /me <text>             send an action message to the current window
     /ctcp <target> <text>  send a raw CTCP request
+    /handshake <nick>      start a secure DH key exchange
     /whois, /w <nick>      look up a user
     /list                  list channels on the server
     /members               list members of the current channel

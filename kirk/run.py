@@ -125,8 +125,9 @@ async def _main(args: argparse.Namespace) -> None:
             )
         ]
     else:
+        config_path = os.path.expanduser(args.config or "~/.kirk.toml")
         try:
-            with open(os.path.expanduser(args.config), "rb") as fh:
+            with open(config_path, "rb") as fh:
                 config = tomllib.load(fh)
         except FileNotFoundError:
             print(
@@ -158,6 +159,7 @@ async def _main(args: argparse.Namespace) -> None:
                 dcc_host_ip=c.get("dcc_host_ip", None),
                 ssl=c.get("ssl", True),
                 log_mode=c.get("log_mode", "none"),
+                config_path=config_path,
             )
             for c in config["kirk"]["client"]
         ]

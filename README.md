@@ -25,6 +25,7 @@ fighting above tools.
 * Fully `asyncio`
 * Implements the majority of [rfc2812](https://datatracker.ietf.org/doc/html/rfc2812)
 * Symmetric E2E encryption with `cryptography.Fernet` **(Kirk exclusive feature)**
+* In-band DH key exchange (`/handshake <nick>`) with mnemonic fingerprint verification
 * Auto-join
 * Auth support (NickServ or SASL)
 * CTCP support
