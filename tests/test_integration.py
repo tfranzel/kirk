@@ -30,9 +30,7 @@ async def test_message_flow_privmsg():
     await client.process_message(privmsg)
 
     channel_messages = list(client.channels["#testchan"].buf)
-    assert any(
-        msg.command == "PRIVMSG" and msg.params[1] == "Hello everyone!" for msg in channel_messages
-    )
+    assert any(msg.command == "PRIVMSG" and msg.params[1] == "Hello everyone!" for msg in channel_messages)
 
 
 @pytest.mark.asyncio
@@ -55,9 +53,7 @@ async def test_channel_lifecycle():
     await client.process_message(IrcRawMessage("friend!user@host", "JOIN", ["#lifecycle"]))
     assert len(client.channels["#lifecycle"].users) == 2
 
-    await client.process_message(
-        IrcRawMessage("server.com", "332", ["testnick", "#lifecycle", "Test topic"])
-    )
+    await client.process_message(IrcRawMessage("server.com", "332", ["testnick", "#lifecycle", "Test topic"]))
     assert client.channels["#lifecycle"].topic == "Test topic"
 
     await client.process_message(IrcRawMessage("friend!user@host", "PART", ["#lifecycle", "Goodbye"]))

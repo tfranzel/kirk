@@ -246,9 +246,7 @@ async def test_send_cmd_with_tags():
     writer = mock_writer()
     client._writer = writer
 
-    await client.send_cmd(
-        "PRIVMSG", "#channel", "Hello world", {"foo-foo": "a,b,c", "bar": None, "baz": "1"}
-    )
+    await client.send_cmd("PRIVMSG", "#channel", "Hello world", {"foo-foo": "a,b,c", "bar": None, "baz": "1"})
     writer.write.assert_called_once_with(b"@foo-foo=a,b,c;bar;baz=1 PRIVMSG #channel :Hello world\r\n")
 
 

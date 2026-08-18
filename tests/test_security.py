@@ -31,9 +31,7 @@ def test_encryption_invalid_token_handling():
         mock_fernet.return_value = mock_cipher
         mock_cipher.decrypt.side_effect = InvalidToken()
 
-        encrypted_msg = IrcRawMessage(
-            "friend!user@host", "PRIVMSG", ["testnick", "~invalid_encrypted_data"]
-        )
+        encrypted_msg = IrcRawMessage("friend!user@host", "PRIVMSG", ["testnick", "~invalid_encrypted_data"])
 
         # a forged/corrupted token must not raise out of message processing
         client.decrypt_privmsg(encrypted_msg)

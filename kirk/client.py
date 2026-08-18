@@ -49,9 +49,7 @@ CHANNEL_PERM_MAPPING: dict[ChannelUserPerm, str] = {
     ChannelUserPerm.VOICE: "+",
     ChannelUserPerm.BASE: "",
 }
-CHANNEL_PERM_MAPPING_REV: dict[str, ChannelUserPerm] = {
-    v: k for k, v in CHANNEL_PERM_MAPPING.items() if k
-}
+CHANNEL_PERM_MAPPING_REV: dict[str, ChannelUserPerm] = {v: k for k, v in CHANNEL_PERM_MAPPING.items() if k}
 
 
 @verify(UNIQUE)
@@ -378,15 +376,11 @@ class IrcClient:
                 self.log_error(f"{recipient} has no key. Cannot send encrypted message")
                 return
             # magic byte marker for encrypted messages followed by cipher
-            outgoing_text = (
-                self.encryption_marker.encode() + Fernet(key).encrypt(text.encode())
-            ).decode()
+            outgoing_text = (self.encryption_marker.encode() + Fernet(key).encrypt(text.encode())).decode()
         else:
             outgoing_text = text
 
-        self.get_buf(recipient).insert(
-            IrcRawMessage(self.nick, "PRIVMSG", [recipient, text], secure=encrypt)
-        )
+        self.get_buf(recipient).insert(IrcRawMessage(self.nick, "PRIVMSG", [recipient, text], secure=encrypt))
         await self.send_cmd("PRIVMSG", recipient, outgoing_text)
 
     async def send_notice(self, recipient: str, text: str) -> None:
@@ -565,9 +559,7 @@ class IrcClient:
         server = await asyncio.start_server(handle_request, "0.0.0.0", port, backlog=1)
 
         # advertise the offering with connection details to recipient
-        await self.send_ctcp_request(
-            recipient, f"DCC SEND {file.name} {host} {port} {file.stat().st_size}"
-        )
+        await self.send_ctcp_request(recipient, f"DCC SEND {file.name} {host} {port} {file.stat().st_size}")
         async with server:
             await server.wait_closed()
 

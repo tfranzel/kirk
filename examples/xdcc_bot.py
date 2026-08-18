@@ -34,9 +34,7 @@ class XdccBot(IrcClient):
     def build_offering_map(self) -> None:
         """Rebuild the announced file map from serve_dir, replacing any previous scan."""
         self._offering_map = dict(
-            enumerate(
-                sorted((p.stat().st_size, p) for p in self.dcc_serve_path.iterdir() if p.is_file())
-            )
+            enumerate(sorted((p.stat().st_size, p) for p in self.dcc_serve_path.iterdir() if p.is_file()))
         )
 
     async def announce_periodically(self, interval_minutes: int) -> None:

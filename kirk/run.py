@@ -140,9 +140,7 @@ async def _main(args: argparse.Namespace) -> None:
 
         if "client_class" in config["kirk"]:
             *path, class_name = config["kirk"]["client_class"].split(".")
-            client_class: type[IrcClient] = getattr(
-                importlib.import_module(".".join(path), "."), class_name
-            )
+            client_class: type[IrcClient] = getattr(importlib.import_module(".".join(path), "."), class_name)
         else:
             client_class = IrcClient
 
