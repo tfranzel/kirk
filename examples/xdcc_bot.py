@@ -88,9 +88,11 @@ async def main() -> None:
     bot = XdccBot(
         host="irc.libera.chat",
         nick="SOMENAME",
-        dcc_announce_channel="#somechannel",
-        dcc_serve_path=Path("/SOME/PATH"),
-        dcc_host_ip="SOME.IP.0.1",
+        auto_join=["#SOMECHANNEL"],
+        dcc_host_ip="127.0.0.1",
+        log_mode="console",
+        dcc_announce_channel="#SOMECHANNEL",
+        dcc_serve_path=Path("/SOME/PATH/"),
     )
     await asyncio.gather(bot.run(), bot.announce_periodically(interval_minutes=10))
 

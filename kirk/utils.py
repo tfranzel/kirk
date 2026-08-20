@@ -2,6 +2,8 @@
 
 import tomlkit
 
+SPECIAL_USERS = ["NickServ", "HostServ", "ChanServ", "SaslServ"]
+
 
 def persist_key(config_path: str, host: str, recipient: str, key: str) -> None:
     """

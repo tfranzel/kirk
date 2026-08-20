@@ -20,9 +20,9 @@ from typing import Any, Literal
 from cryptography.fernet import Fernet, InvalidToken
 from tomlkit.exceptions import TOMLKitError
 
-from kirk import ASCII_LOGO
+from kirk import ASCII_LOGO, VERSION
 from kirk.security import KeyExchange, build_client_ssl_context, build_server_ssl_context
-from kirk.utils import persist_key
+from kirk.utils import SPECIAL_USERS, persist_key
 
 logger = logging.getLogger("IrcClient")
 
@@ -195,7 +195,7 @@ class IrcClient:
         - https://modern.ircdocs.horse/formatting
     """
 
-    version = "Kirk 0.8.1 (python)"
+    version = f"Kirk {VERSION} (python)"
     encryption_marker = "~"
     cap_client = {"message-tags", "sasl"}
 
@@ -376,17 +376,21 @@ class IrcClient:
     async def who(self, nick: str) -> None:
         await self.send_cmd("WHO", nick)
 
-    async def send_message(self, recipient: str, text: str, encrypt: bool = False) -> None:
-        if encrypt:
-            if not (key := self.keys.get(recipient)):
-                self.log_error(f"{recipient} has no key. Cannot send encrypted message")
-                return
+    async def send_message(self, recipient: str, text: str, encrypt: bool | None = None) -> None:
+        """Try to send message encrypted if we have a key and NOT specifically disabled"""
+        key = self.keys.get(recipient)
+        if not key and encrypt:
+            self.log_error(f"{recipient} has no key. Cannot send encrypted message")
+            return
+        if key and encrypt is not False:
             # magic byte marker for encrypted messages followed by cipher
             outgoing_text = (self.encryption_marker.encode() + Fernet(key).encrypt(text.encode())).decode()
+            secure = True
         else:
             outgoing_text = text
+            secure = False
 
-        self.get_buf(recipient).insert(IrcRawMessage(self.nick, "PRIVMSG", [recipient, text], secure=encrypt))
+        self.get_buf(recipient).insert(IrcRawMessage(self.nick, "PRIVMSG", [recipient, text], secure=secure))
         await self.send_cmd("PRIVMSG", recipient, outgoing_text)
 
     async def send_notice(self, recipient: str, text: str) -> None:
@@ -557,7 +561,7 @@ class IrcClient:
                 host=dcc.ip, port=dcc.port, limit=2**24, ssl=build_client_ssl_context() if dcc.ssl else None
             )
             self.log(
-                f"{'Secure c' if dcc.ssl else 'C '}onnection established to {dcc.ip}:{dcc.port}",
+                f"{'Secure c' if dcc.ssl else 'C'}onnection established to {dcc.ip}:{dcc.port}",
                 "DCC",
                 dcc.source,
             )
@@ -768,12 +772,7 @@ class IrcClient:
                     self.server_aliases.append(message.prefix_nick)
 
                 # Centralize special service notices
-                if not message.prefix or message.prefix_nick in (
-                    "NickServ",
-                    "HostServ",
-                    "ChanServ",
-                    "SaslServ",
-                ):
+                if not message.prefix or message.prefix_nick in SPECIAL_USERS:
                     self.server_buf.insert(message)
                 else:
                     self.get_buf(message.prefix_nick).insert(message)
