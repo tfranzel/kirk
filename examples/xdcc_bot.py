@@ -46,7 +46,7 @@ class XdccBot(IrcClient):
 
             await self.send_message(
                 self.dcc_announce_channel,
-                f'\x02**\x02 To request a file, type "/MSG {self.nick} XDCC SEND x" \x02**\x02',
+                f'\x02**\x02 To request a file, type "/MSG {self.nick} XDCC (S)SEND x"\x02**\x02',
             )
 
             for idx, (size, path) in self._offering_map.items():
@@ -64,13 +64,13 @@ class XdccBot(IrcClient):
         _, text = message.params
         requester = message.prefix_nick
 
-        match = re.match(r"^xdcc send #(?P<idx>\d+)$", text.strip(), re.IGNORECASE)
+        match = re.match(r"^xdcc (?P<mode>s?send) #(?P<idx>\d+)$", text.strip(), re.IGNORECASE)
         offering = self._offering_map.get(int(match["idx"])) if match else None
 
-        if offering:
+        if offering and match:
             size, file = offering
-            self.log(f"Resolved {match['idx']} to {file.name} ({self.format_size(size)}), sending ...")  # type: ignore[index]
-            await self.dcc_send(requester, file)
+            self.log(f"Resolved {match['idx']} to {file.name} ({self.format_size(size)}), sending ...")
+            await self.dcc_send(requester, file, ssl=match["mode"].lower() == "ssend")
         else:
             await self.send_message(requester, "Invalid request")
 

@@ -254,8 +254,8 @@ class Kirk:
         elif command == "raw" and len(args) > 0:
             coro = self.client.send_cmd(args[0], args[1:])
         elif command == "dcc":
-            if len(args) == 3 and args[0] == "send":
-                coro = self.client.dcc_send(args[1], Path(args[2]))
+            if len(args) == 3 and args[0] in ("send", "ssend"):
+                coro = self.client.dcc_send(recipient=args[1], file=Path(args[2]), ssl=args[0] == "ssend")
             elif len(args) == 1 and args[0] == "clear":
                 self.client.dcc = [dcc for dcc in self.client.dcc if dcc.complete]
         elif command:

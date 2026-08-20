@@ -1,9 +1,17 @@
 import base64
 import secrets
+import ssl
+import tempfile
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
+from cryptography import x509
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
+from cryptography.x509.oid import NameOID
 
 _WORDLIST = [
     "alert",
@@ -142,3 +150,40 @@ class KeyExchange:
             salt=self._salt,
             info=None,
         ).derive(shared_secret)
+
+
+def build_client_ssl_context() -> ssl.SSLContext:
+    ssl_ctx = ssl.SSLContext()
+    ssl_ctx.set_ciphers("DEFAULT:@SECLEVEL=1")  # be lenient, this is not banking.
+    return ssl_ctx
+
+
+def build_server_ssl_context() -> ssl.SSLContext:
+    """
+    Server-side TLS context for DCC SSEND. Unlike the client side, a server
+    must present a certificate during the handshake, so this generates a
+    throwaway self-signed one - there's no CA to issue a real one here
+    """
+    ssl_ctx = ssl.SSLContext()
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ephemeral-transfer-cert")])
+    now = datetime.now(UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cert_path = Path(tmpdir) / "cert.pem"
+        key_path = Path(tmpdir) / "key.pem"
+        cert_path.write_bytes(cert.public_bytes(Encoding.PEM))
+        key_path.write_bytes(
+            key.private_bytes(Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption())
+        )
+        ssl_ctx.load_cert_chain(cert_path, key_path)
+    return ssl_ctx

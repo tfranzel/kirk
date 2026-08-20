@@ -19,7 +19,7 @@ Kirk commands:
     /nick <name>           change your nickname
     /grep <term>           open a filtered window of matching messages
     /raw <cmd> [args]      send a raw IRC command
-    /dcc send <nick> <file> offer a file to a user over DCC
+    /dcc send/ssend <nick> <file> offer a file to a user over DCC (ssend = TLS)
     /save                  persist current session state
 
 Navigation:

@@ -5,7 +5,6 @@ import errno
 import ipaddress
 import logging
 import random
-import ssl
 import struct
 import traceback
 from asyncio import StreamReader, StreamWriter, Task
@@ -21,8 +20,9 @@ from typing import Any, Literal
 from cryptography.fernet import Fernet, InvalidToken
 from tomlkit.exceptions import TOMLKitError
 
-from kirk import ASCII_LOGO, config
-from kirk.security import KeyExchange
+from kirk import ASCII_LOGO
+from kirk.security import KeyExchange, build_client_ssl_context, build_server_ssl_context
+from kirk.utils import persist_key
 
 logger = logging.getLogger("IrcClient")
 
@@ -451,7 +451,7 @@ class IrcClient:
 
         if self.config_path:
             try:
-                config.persist_key(self.config_path, self.host, source, dh.shared_key)
+                persist_key(self.config_path, self.host, source, dh.shared_key)
             except (OSError, TOMLKitError, KeyError) as e:
                 self.log_error(f"Could not persist key to {self.config_path}: {e}", "SEC")
 
@@ -533,6 +533,7 @@ class IrcClient:
             cipher = text[len(self.encryption_marker) :]
             message.params[1] = Fernet(key=self.keys[source]).decrypt(cipher, ttl=5).decode()
             message.secure = True
+            self.log(message, "IN", show=False)
         except (InvalidToken, KeyError):
             self.log_error("failed decrypting message", "SEC", source)
 
@@ -551,17 +552,15 @@ class IrcClient:
         if not self.dcc_dir:
             self.log_error("DCC directory not set. Doing nothing.", "DCC", dcc.source)
             return
-
-        if dcc.ssl:
-            ssl_ctx = ssl.SSLContext()
-            ssl_ctx.set_ciphers("DEFAULT:@SECLEVEL=1")  # be lenient, this is not banking.
-        else:
-            ssl_ctx = False  # type: ignore[assignment]
         try:
             reader, writer = await asyncio.open_connection(
-                host=dcc.ip, port=dcc.port, limit=2**24, ssl=ssl_ctx
+                host=dcc.ip, port=dcc.port, limit=2**24, ssl=build_client_ssl_context() if dcc.ssl else None
             )
-            self.log(f"Connection established to {dcc.ip}:{dcc.port}", "DCC", dcc.source)
+            self.log(
+                f"{'Secure c' if dcc.ssl else 'C '}onnection established to {dcc.ip}:{dcc.port}",
+                "DCC",
+                dcc.source,
+            )
         except Exception as e:
             self.log(f"Failed opening connection: {e}\n{traceback.format_exc()}\n", "DCC", dcc.source)
             return
@@ -591,7 +590,7 @@ class IrcClient:
         self.log("Connection closed. File written successfully", "DCC", dcc.source)
         await self.dcc_complete_callback(dcc)
 
-    async def dcc_send(self, recipient: str, file: Path) -> None:
+    async def dcc_send(self, recipient: str, file: Path, ssl: bool = False) -> None:
         """Offer `file` to `recipient` over DCC and serve it once they accept."""
 
         async def handle_request(reader: StreamReader, writer: StreamWriter) -> None:
@@ -607,7 +606,7 @@ class IrcClient:
                 await writer.wait_closed()
 
         if not self.dcc_host_ip:
-            self.log_error("dcc_host_ip not set. Cannot offer DCC SEND.", "DCC", recipient)
+            self.log_error("dcc_host_ip not set. Cannot offer file.", "DCC", recipient)
             return
         if not file.is_file():
             self.log_error(f"No such file: {file}", "DCC", recipient)
@@ -619,10 +618,14 @@ class IrcClient:
         # backlog=1 so the OS refuses any further connection attempts at the TCP
         # level while our single accepted connection is being served
         self.log(f"Starting server on port {port}", "DCC", recipient)
-        server = await asyncio.start_server(handle_request, "0.0.0.0", port, backlog=1)
-
+        server = await asyncio.start_server(
+            handle_request, "0.0.0.0", port, backlog=1, ssl=build_server_ssl_context() if ssl else None
+        )
         # advertise the offering with connection details to recipient
-        await self.send_ctcp_request(recipient, f"DCC SEND {file.name} {host} {port} {file.stat().st_size}")
+        send_type = "SSEND" if ssl else "SEND"
+        await self.send_ctcp_request(
+            recipient, f"DCC {send_type} {file.name} {host} {port} {file.stat().st_size}"
+        )
         async with server:
             await server.wait_closed()
 
