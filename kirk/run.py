@@ -1,9 +1,11 @@
 import argparse
 import asyncio
-import importlib
+import importlib.util
 import os
 import signal
 import tomllib
+from pathlib import Path
+from typing import cast
 
 from kirk.client import IrcClient
 from kirk.kirk import Kirk
@@ -106,6 +108,24 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def load_client_class(spec: str, config_path: str) -> type[IrcClient]:
+    """Load a custom IrcClient subclass from a 'path/to/file.py:ClassName' spec."""
+    file_part, _, class_name = spec.rpartition(":")
+    if not file_part or not class_name:
+        raise ValueError(f"client_class must be 'path/to/file.py:ClassName', got {spec!r}")
+
+    file_path = Path(file_part).expanduser()
+    if not file_path.is_absolute():
+        file_path = Path(config_path).expanduser().parent / file_path
+
+    module_spec = importlib.util.spec_from_file_location(file_path.stem, file_path)
+    if module_spec is None or module_spec.loader is None:
+        raise ImportError(f"cannot load module from {file_path}")
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    return cast("type[IrcClient]", getattr(module, class_name))
+
+
 async def _main(args: argparse.Namespace) -> None:
     """Initialize and run Kirk IRC client from CLI arguments or a configuration file."""
     if args.host and args.nick:
@@ -140,8 +160,7 @@ async def _main(args: argparse.Namespace) -> None:
             exit(1)
 
         if "client_class" in config["kirk"]:
-            *path, class_name = config["kirk"]["client_class"].split(".")
-            client_class: type[IrcClient] = getattr(importlib.import_module(".".join(path), "."), class_name)
+            client_class: type[IrcClient] = load_client_class(config["kirk"]["client_class"], config_path)
         else:
             client_class = IrcClient
 

@@ -239,7 +239,7 @@ class Kirk:
             if len(args) == 3 and args[0] in ("send", "ssend"):
                 coro = self.client.dcc_send(recipient=args[1], file=Path(args[2]), ssl=args[0] == "ssend")
             elif len(args) == 1 and args[0] == "clear":
-                self.client.dcc = [dcc for dcc in self.client.dcc if dcc.complete]
+                self.client.dcc = [dcc for dcc in self.client.dcc if not dcc.complete]
         elif command:
             self.error_msg = f"Command unknown: {command} {args}"
         elif not command and args:
@@ -404,8 +404,11 @@ class Kirk:
         #     print(f"f:{self._frame}", end="")
 
     def render_topic_line(self) -> None:
+        topic = irc_to_ansi(self.current_window.header, self.t)
+        if self.t.length(topic) > self.t.width:
+            topic = self.t.truncate(topic, max(self.t.width - 3, 0)) + "..."
         with self.t.location(0, 0):
-            self.render_interface_line(irc_to_ansi(self.current_window.header, self.t))
+            self.render_interface_line(topic)
 
     def render_box(self, inner_height: int, inner_width: int) -> tuple[int, int, int, int]:
         """Draw a box with '-' edges and '+' corners, anchored to the top-right of the window."""
@@ -468,6 +471,9 @@ class Kirk:
                 lines = self.format_message(buf_page[buf_idx], nick_offset, cmd_offset)
                 buf_idx += 1
                 for head, body in reversed(lines):
+                    if line_idx < 1:
+                        # a message that wraps into multiple physical lines can run out of room
+                        break
                     with self.t.location(0, line_idx):
                         print(self.t.clear_eol + f"{head}{body}", end="")
                         line_idx -= 1
@@ -475,7 +481,7 @@ class Kirk:
         # page indication
         if self.current_window.page != 0:
             with self.t.location(self.t.width - 5, self.t.height - 4):
-                print(self.t.on_darkolivegreen(self.t.rjust(str(self.current_window.page), 3)), end="")
+                print(self.t.rjust(self.t.on_darkolivegreen(str(self.current_window.page)), 3), end="")
 
     def render_tabs(self) -> None:
         with self.t.location(0, self.t.height - 2):

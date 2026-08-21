@@ -66,8 +66,9 @@ python -m kirk.run --host irc.libera.chat --nick NosySpock
 [kirk]
 # save buffer history on exit and load on start
 persistence = false
-# Custom IrcClient class that Kirk should use instead.
-# client_class = "some.import.path"
+# Custom IrcClient class that Kirk should use instead, as 'path/to/file.py:ClassName'.
+# Relative paths resolve against this config file's directory, not the CWD.
+# client_class = "clients/my_client.py:MyClient"
 
 [[kirk.client]]
 host = "irc.libera.chat"
