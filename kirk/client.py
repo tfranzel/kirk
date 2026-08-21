@@ -692,12 +692,7 @@ class IrcClient:
         return any(name.startswith(prefix) for prefix in "&#+!")
 
     async def process_message(self, message: IrcRawMessage) -> None:
-        # allow to patch in alternate functionality
-        if callback := getattr(self, f"on_{message.command.lower()}_callback", None):
-            callback(message)
-            return
-
-        # default handling
+        """Handle incoming messages from server"""
         match message.command:
             case "PING":
                 # keep-alive signal from server

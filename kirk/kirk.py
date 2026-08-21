@@ -1,4 +1,3 @@
-import curses
 import itertools
 import traceback
 from asyncio import AbstractEventLoop
@@ -9,6 +8,7 @@ from typing import Any
 
 from blessed import Terminal
 from blessed.keyboard import Keystroke
+from blessed.line_editor import LineEditor
 
 from kirk.client import (
     CHANNEL_PERM_MAPPING,
@@ -22,8 +22,6 @@ from kirk.client import (
 from kirk.color import highlight_mentions, irc_to_ansi, name_to_rgb
 from kirk.help import HELP_TEXT
 from kirk.transporter import Transporter
-
-OPT_NUMBER_MAPPING = dict(zip("¡™£¢∞§¶•ªº", range(10), strict=False))
 
 
 class ExitInterrupt(Exception):
@@ -91,11 +89,18 @@ class Kirk:
 
     def __init__(self, clients: Sequence[IrcClient], loop: AbstractEventLoop):
         self.t = Terminal()
+        self.e = LineEditor(
+            keymap={
+                "KEY_ALT_B": LineEditor._move_word_left,
+                "KEY_ALT_LEFT": LineEditor._move_word_left,
+                "KEY_ALT_F": LineEditor._move_word_right,
+                "KEY_ALT_RIGHT": LineEditor._move_word_right,
+            }
+        )
         self.loop = loop
         self.clients = list(clients)
         self.client_idx = 0
         self.client_windows: list[dict[str, Window]] = [{} for _ in clients]
-        self.prompt_buf: list[str] = []
         self.current_window_name: str = self.client.server_buf_name
         self.dirty = True
         self.error_msg = ""
@@ -133,64 +138,41 @@ class Kirk:
         self.sync_client()
 
     def process_input(self, val: Keystroke) -> None:
-        if val.code == curses.KEY_PPAGE:
+        if not val.value and not val.name and not val.code:
+            # this is the loop timeout. do nothing
+            pass
+        elif val.name == "KEY_PGUP":
             # scrolling up
             self.current_window.page_up()
             self.dirty = True
-        elif val.code == curses.KEY_NPAGE:
+        elif val.name == "KEY_PGDOWN":
             # scrolling down
             self.current_window.page_down()
             self.dirty = True
-        elif val.code in [curses.KEY_END, curses.KEY_SELECT]:
-            # scrolling down all the way
-            self.current_window.page_reset()
-            self.dirty = True
-        elif val.code in [curses.KEY_LEFT, curses.KEY_RIGHT]:
-            # change tabs
-            self.switch_window_relative(offset=1 if val.code == curses.KEY_RIGHT else -1)
         elif val.name == "RESIZE_EVENT":
             self.dirty = True
         elif val.name == "KEY_TAB":
-            pass  # TODO
+            pass  # TODO: tab-completion in LineEditor
         elif val.name == "KEY_ESCAPE":
             self.error_msg = ""
+            self.current_window.page_reset()
             self.dirty = True
-        elif val.code == curses.KEY_BACKSPACE:
-            # prompt delete char
-            if self.prompt_buf:
-                self.prompt_buf.pop()
-            self.dirty = True
-            self.error_msg = ""
-        elif val.name == "KEY_DELETE":
-            # wipe prompt
-            self.prompt_buf.clear()
-            self.dirty = True
-            self.error_msg = ""
-        elif str(val) in OPT_NUMBER_MAPPING:
-            # change tabs with <OPT> + NUMERAL
-            requested_idx = OPT_NUMBER_MAPPING[str(val)]
-            if requested_idx < len(self.windows):
-                self.current_window_name = list(self.windows.keys())[requested_idx]
-                self.dirty = True
-        elif val.code == curses.KEY_ENTER:
-            # send it
-            self.process_prompt()
-        elif val.is_sequence:
-            # Do nothing for multibyte sequences (e.g. uncaught modifiers, arrow keys, etc.).
-            # This is safe for multibyte Unicode (é, 日) and single-codepoint emoji
-            pass
-        elif val:
-            self.prompt_buf.append(str(val))
-            self.dirty = True
+        elif val.name in ("KEY_SLEFT", "KEY_SHIFT_LEFT"):
+            self.switch_window_relative(offset=-1)
+        elif val.name in ("KEY_SRIGHT", "KEY_SHIFT_RIGHT"):
+            self.switch_window_relative(offset=1)
         else:
-            # the blessed inkey timeout will end up here - nothing to do
-            pass
+            # everything else is handled by the line editor itself
+            result = self.e.feed_key(val)
+            if result.changed:
+                self.dirty = True
+            if result.bell:
+                print(result.bell, end="")
+            if result.line is not None:
+                self.process_prompt(result.line)
 
-    def process_prompt(self) -> None:
-        if not self.prompt_buf:
-            return
-
-        command, args = self.parse_prompt()
+    def process_prompt(self, line: str) -> None:
+        command, args = self.parse_prompt(line)
         coro: Coroutine[Any, Any, None] | None = None
 
         if command == "exit":
@@ -200,8 +182,8 @@ class Kirk:
         elif command == "save":
             Transporter.beam_down(self)
         elif command in ("help", "h"):
-            for line in HELP_TEXT.split("\n"):
-                self.client.log(line, "HELP", self.current_window_name)
+            for help_line in HELP_TEXT.split("\n"):
+                self.client.log(help_line, "HELP", self.current_window_name)
         elif command in ("q", "quit"):
             coro = self.client.quit()
         elif command in ("l", "list"):
@@ -274,12 +256,10 @@ class Kirk:
         # schedule response action as task inside the client eventloop.
         if coro:
             self.client.delay(coro, self.loop)
-        self.prompt_buf.clear()
-        self.dirty = True
 
-    def parse_prompt(self) -> tuple[str, list[str]]:
+    def parse_prompt(self, text: str | None = None) -> tuple[str, list[str]]:
         """Decompose input buffer into command and plain text"""
-        prompt = "".join(self.prompt_buf).split()
+        prompt = (text if text is not None else self.e.line).split()
 
         if not prompt:
             return "", []
@@ -522,18 +502,22 @@ class Kirk:
             )
 
     def render_prompt(self) -> None:
-        with self.t.location(0, self.t.height - 1):
-            prompt = "".join(self.prompt_buf)
-            command, args = self.parse_prompt()
+        command, args = self.parse_prompt()
 
-            secure_adhoc_target = command == "msg" and len(args) > 1 and args[0] in self.client.keys
-            secure_target = self.current_window_name in self.client.keys
-            secured = self.t.tomato(" secured >>") if secure_adhoc_target or secure_target else ""
+        secure_adhoc_target = command == "msg" and len(args) > 1 and args[0] in self.client.keys
+        secure_target = self.current_window_name in self.client.keys
+        secured = self.t.tomato(" secured >>") if secure_adhoc_target or secure_target else ""
 
-            print(self.t.clear_eol + f"[{self.client.nick}]{secured} {prompt}", end="")
+        prefix = f"[{self.client.nick}]{secured} "
+        prefix_width = self.t.length(prefix)
+        print(self.t.move_yx(self.t.height - 1, 0) + self.t.clear_eol + prefix, end="")
+
+        self.e.max_width = self.t.width - prefix_width
+        print(self.e.render(self.t, self.t.height - 1, self.e.max_width, col=prefix_width), end="")
+        self.t.stream.flush()
 
     def run(self) -> None:
-        with self.t.fullscreen(), self.t.cbreak(), self.t.hidden_cursor(), self.t.notify_on_resize():
+        with self.t.fullscreen(), self.t.cbreak(), self.t.notify_on_resize():
             print(self.t.home + self.t.clear, end="")
             val = Keystroke()
             while True:

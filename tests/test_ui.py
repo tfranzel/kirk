@@ -1,5 +1,5 @@
 import curses
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -167,8 +167,7 @@ def test_kirk_parse_prompt_command():
 
     with patch("kirk.kirk.Terminal"):
         kirk = Kirk([client], loop)
-        kirk.prompt_buf = list("/join #test")
-        assert kirk.parse_prompt() == ("join", ["#test"])
+        assert kirk.parse_prompt("/join #test") == ("join", ["#test"])
 
 
 def test_kirk_parse_prompt_message():
@@ -177,8 +176,7 @@ def test_kirk_parse_prompt_message():
 
     with patch("kirk.kirk.Terminal"):
         kirk = Kirk([client], loop)
-        kirk.prompt_buf = list("Hello world")
-        assert kirk.parse_prompt() == ("", ["Hello", "world"])
+        assert kirk.parse_prompt("Hello world") == ("", ["Hello", "world"])
 
 
 def test_kirk_parse_prompt_empty():
@@ -187,8 +185,7 @@ def test_kirk_parse_prompt_empty():
 
     with patch("kirk.kirk.Terminal"):
         kirk = Kirk([client], loop)
-        kirk.prompt_buf = []
-        assert kirk.parse_prompt() == ("", [])
+        assert kirk.parse_prompt("") == ("", [])
 
 
 def test_kirk_is_server_window():
@@ -213,16 +210,16 @@ def test_kirk_process_input_page_up_down():
         kirk.sync_client()
 
         keystroke = Mock()
-        keystroke.code = curses.KEY_PPAGE
+        keystroke.name = "KEY_PGUP"
         kirk.process_input(keystroke)
         assert kirk.current_window.page == 1
 
-        keystroke.code = curses.KEY_NPAGE
+        keystroke.name = "KEY_PGDOWN"
         kirk.process_input(keystroke)
         assert kirk.current_window.page == 0
 
 
-def test_kirk_process_input_arrow_keys():
+def test_kirk_process_input_shift_arrow_switches_tabs():
     client = IrcClient(host="test.com", nick="testnick")
     loop = Mock()
 
@@ -231,64 +228,43 @@ def test_kirk_process_input_arrow_keys():
         kirk.windows["#test"] = Window("#test", Buffer())
 
         keystroke = Mock()
-        keystroke.code = curses.KEY_RIGHT
+        keystroke.name = "KEY_SRIGHT"
         with patch.object(kirk, "switch_window_relative") as mock_switch:
             kirk.process_input(keystroke)
             mock_switch.assert_called_once_with(offset=1)
 
-        keystroke.code = curses.KEY_LEFT
+        keystroke.name = "KEY_SLEFT"
         with patch.object(kirk, "switch_window_relative") as mock_switch:
             kirk.process_input(keystroke)
             mock_switch.assert_called_once_with(offset=-1)
 
 
-def test_kirk_process_input_backspace():
+def test_kirk_process_prompt_records_history():
     client = IrcClient(host="test.com", nick="testnick")
     loop = Mock()
 
     with patch("kirk.kirk.Terminal"):
         kirk = Kirk([client], loop)
-        kirk.prompt_buf = list("hello")
-        kirk.error_msg = "some error"
+        kirk.windows["#test"] = Window("#test", Buffer())
+        kirk.current_window_name = "#test"
 
-        keystroke = Mock()
-        keystroke.code = curses.KEY_BACKSPACE
-        kirk.process_input(keystroke)
+        enter = Mock()
+        enter.name = "KEY_ENTER"
 
-        assert kirk.prompt_buf == list("hell")
-        assert kirk.error_msg == ""
+        kirk.e.insert_text("Hello everyone!")
+        with patch.object(client, "delay") as mock_delay:
+            kirk.process_input(enter)
+            mock_delay.call_args[0][0].close()
 
+        assert kirk.e.history.entries == ["Hello everyone!"]
 
-def test_kirk_process_input_delete():
-    client = IrcClient(host="test.com", nick="testnick")
-    loop = Mock()
+        # submitting the exact same line again is not duplicated
+        kirk.e.insert_text("Hello everyone!")
+        with patch.object(client, "delay") as mock_delay:
+            kirk.process_input(enter)
+            mock_delay.call_args[0][0].close()
 
-    with patch("kirk.kirk.Terminal"):
-        kirk = Kirk([client], loop)
-        kirk.prompt_buf = list("hello world")
-
-        keystroke = Mock()
-        keystroke.name = "KEY_DELETE"
-        kirk.process_input(keystroke)
-
-        assert kirk.prompt_buf == []
-
-
-def test_kirk_process_input_character():
-    client = IrcClient(host="test.com", nick="testnick")
-    loop = Mock()
-
-    with patch("kirk.kirk.Terminal"):
-        kirk = Kirk([client], loop)
-
-        keystroke = MagicMock()
-        keystroke.code = None
-        keystroke.name = ""
-        keystroke.is_sequence = False
-        keystroke.__str__.return_value = "a"  # type: ignore[attr-defined]
-
-        kirk.process_input(keystroke)
-        assert kirk.prompt_buf == ["a"]
+        assert kirk.e.history.entries == ["Hello everyone!"]
 
 
 def test_kirk_process_input_enter():
@@ -297,13 +273,14 @@ def test_kirk_process_input_enter():
 
     with patch("kirk.kirk.Terminal"):
         kirk = Kirk([client], loop)
-        kirk.prompt_buf = list("/quit")
+        kirk.e.insert_text("/quit")
 
         keystroke = Mock()
+        keystroke.name = "KEY_ENTER"
         keystroke.code = curses.KEY_ENTER
         with patch.object(kirk, "process_prompt") as mock_process:
             kirk.process_input(keystroke)
-            mock_process.assert_called_once()
+            mock_process.assert_called_once_with("/quit")
 
 
 def test_kirk_process_prompt_join():
@@ -312,10 +289,9 @@ def test_kirk_process_prompt_join():
 
     with patch("kirk.kirk.Terminal"):
         kirk = Kirk([client], loop)
-        kirk.prompt_buf = list("/join #testchannel")
 
         with patch.object(client, "delay") as mock_delay:
-            kirk.process_prompt()
+            kirk.process_prompt("/join #testchannel")
             mock_delay.assert_called_once()
             mock_delay.call_args[0][0].close()  # avoid "coroutine was never awaited" from the mock
 
@@ -326,11 +302,10 @@ def test_kirk_process_prompt_exit():
 
     with patch("kirk.kirk.Terminal"):
         kirk = Kirk([client], loop)
-        kirk.prompt_buf = list("/exit")
 
         with patch.object(client, "delay") as mock_delay:
             with pytest.raises(ExitInterrupt):
-                kirk.process_prompt()
+                kirk.process_prompt("/exit")
 
             mock_delay.assert_called_once()
             mock_delay.call_args[0][0].close()
@@ -344,13 +319,11 @@ def test_kirk_process_prompt_message_to_channel():
         kirk = Kirk([client], loop)
         kirk.windows["#test"] = Window("#test", Buffer())
         kirk.current_window_name = "#test"
-        kirk.prompt_buf = list("Hello everyone!")
 
         with patch.object(client, "delay") as mock_delay:
-            kirk.process_prompt()
+            kirk.process_prompt("Hello everyone!")
             mock_delay.assert_called_once()
             mock_delay.call_args[0][0].close()
-            assert kirk.prompt_buf == []
 
 
 def test_kirk_process_prompt_message_to_server():
@@ -360,12 +333,10 @@ def test_kirk_process_prompt_message_to_server():
     with patch("kirk.kirk.Terminal"):
         kirk = Kirk([client], loop)
         assert kirk.is_server_window
-        kirk.prompt_buf = list("Hello server")
 
-        kirk.process_prompt()
+        kirk.process_prompt("Hello server")
 
         assert "Cannot send message to server window" in kirk.error_msg
-        assert kirk.prompt_buf == []
 
 
 def test_kirk_sync_client():
@@ -385,10 +356,3 @@ def test_kirk_sync_client():
         assert "friend" in kirk.windows
         assert kirk.windows["#testchannel"].header == "[#testchannel] Test topic"
         assert kirk.windows["friend"].header == "[friend]"
-
-
-def test_opt_number_mapping():
-    from kirk.kirk import OPT_NUMBER_MAPPING
-
-    assert len(OPT_NUMBER_MAPPING) == 10
-    assert OPT_NUMBER_MAPPING["¡"] == 0

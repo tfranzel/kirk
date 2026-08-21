@@ -23,9 +23,13 @@ Kirk commands:
     /save                  persist current session state
 
 Navigation:
-    Left/Right arrows      switch tabs
+    Left/Right arrows      move the cursor within the prompt
+    Home/End               jump the cursor to the start/end of the prompt
+    Shift+Left/Right       switch tabs
+    Alt+Left/Right         move the cursor to the next word
+    Up/Down arrows         cycle through recent prompt history
+    Backspace/Delete       delete the char before/under the cursor
     Page Up/Down           scroll the current window
-    End                    jump to the bottom of the window
 
 Any other text is sent as a message to the current window.
 """
