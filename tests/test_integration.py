@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from kirk.client import IrcClient, IrcRawMessage
+from kirk.utils import resolve_dcc_path
 
 
 def mock_writer() -> Mock:
@@ -171,6 +172,57 @@ async def test_dcc_offer_parsing():
         assert dcc.size == 1000
         mock_delay.assert_called_once()
         mock_delay.call_args[0][0].close()  # avoid "coroutine was never awaited" from the mock
+
+
+def test_resolve_dcc_path_plain_filename(tmp_path: Path) -> None:
+    resolved = resolve_dcc_path(str(tmp_path), "picture.png")
+    assert resolved == tmp_path.resolve() / "picture.png"
+
+
+def test_resolve_dcc_path_rejects_relative_traversal(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="invalid DCC filename"):
+        resolve_dcc_path(str(tmp_path), "../../../../etc/passwd")
+
+
+def test_resolve_dcc_path_rejects_absolute_path(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="invalid DCC filename"):
+        resolve_dcc_path(str(tmp_path), "/etc/passwd")
+
+
+def test_resolve_dcc_path_rejects_subdirectory(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="invalid DCC filename"):
+        resolve_dcc_path(str(tmp_path), "subdir/file.txt")
+
+
+def test_resolve_dcc_path_rejects_bare_traversal_segment(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="invalid DCC filename"):
+        resolve_dcc_path(str(tmp_path), "..")
+
+
+def test_resolve_dcc_path_rejects_empty_filename(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="invalid DCC filename"):
+        resolve_dcc_path(str(tmp_path), "")
+
+
+@pytest.mark.asyncio
+async def test_dcc_download_rejects_path_traversal_offer(tmp_path: Path) -> None:
+    client = IrcClient(host="test.com", nick="testnick", dcc_dir=str(tmp_path))
+
+    dcc_text = "DCC SEND ../../../../etc/passwd 3232235521 1234 1000"
+    ctcp_msg = IrcRawMessage("sender!user@host", "PRIVMSG", ["testnick", f"\x01{dcc_text}\x01"])
+
+    with patch.object(client, "_delay") as mock_delay:
+        await client.process_message(ctcp_msg)
+        dcc = client.dcc[0]
+        mock_delay.call_args[0][0].close()  # avoid "coroutine was never awaited" from the mock
+
+    with patch("asyncio.open_connection") as mock_open_connection:
+        await client.dcc_download(dcc)
+
+    # the malicious offer never even reaches the point of opening a connection
+    mock_open_connection.assert_not_called()
+    assert not (tmp_path.parent / "passwd").exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 class _FakeServer:

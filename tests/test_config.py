@@ -2,8 +2,7 @@ import pytest
 import tomlkit
 
 from kirk.client import IrcClient
-from kirk.run import load_client_class
-from kirk.utils import persist_key
+from kirk.utils import load_client_class, persist_key
 
 
 def test_persist_key_writes_new_key_for_listed_host(tmp_path):

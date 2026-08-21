@@ -17,11 +17,11 @@ from kirk.client import (
     ChannelUserPerm,
     IrcClient,
     IrcRawMessage,
-    is_ctcp,
 )
 from kirk.color import highlight_mentions, irc_to_ansi, name_to_rgb
 from kirk.help import HELP_TEXT
 from kirk.transporter import Transporter
+from kirk.utils import is_ctcp
 
 
 class ExitInterrupt(Exception):

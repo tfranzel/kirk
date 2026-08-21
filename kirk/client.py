@@ -22,7 +22,7 @@ from tomlkit.exceptions import TOMLKitError
 
 from kirk import ASCII_LOGO, VERSION
 from kirk.security import KeyExchange, build_client_ssl_context, build_server_ssl_context
-from kirk.utils import SPECIAL_USERS, persist_key
+from kirk.utils import SPECIAL_USERS, is_ctcp, persist_key, resolve_dcc_path
 
 logger = logging.getLogger("IrcClient")
 
@@ -180,10 +180,6 @@ class DCC:
     @property
     def complete(self) -> bool:
         return self.size == self.bytes_received
-
-
-def is_ctcp(text: str) -> bool:
-    return text.startswith("\x01") and text.endswith("\x01")
 
 
 class IrcClient:
@@ -557,6 +553,11 @@ class IrcClient:
             self.log_error("DCC directory not set. Doing nothing.", "DCC", dcc.source)
             return
         try:
+            target_path = resolve_dcc_path(self.dcc_dir, dcc.filename)
+        except ValueError as e:
+            self.log_error(f"Refusing DCC transfer: {e}", "DCC", dcc.source)
+            return
+        try:
             reader, writer = await asyncio.open_connection(
                 host=dcc.ip, port=dcc.port, limit=2**24, ssl=build_client_ssl_context() if dcc.ssl else None
             )
@@ -570,7 +571,7 @@ class IrcClient:
             return
 
         last_status = datetime.now()
-        with open(Path(self.dcc_dir) / dcc.filename, "wb") as fh:
+        with open(target_path, "wb") as fh:
             while True:
                 data = await reader.read(2**20)
                 fh.write(data)
